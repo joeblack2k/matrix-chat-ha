@@ -12,9 +12,15 @@ This gateway runs separately with `matrix-nio[e2e]` and handles encrypted room s
   - `room_id`
   - `message`
   - `format` (`text` or `html`)
+  - optional `reply_to_event_id`
+  - optional `edit_event_id`
 - `POST /send_media` multipart:
   - `room_id`, `msgtype`, `body`, `caption`, `mime_type`, `info`
   - `file` (binary)
+- `POST /send_reaction` JSON:
+  - `room_id`
+  - `event_id`
+  - `reaction_key`
 
 All `POST` calls require `Authorization: Bearer <MATRIX_GATEWAY_TOKEN>`.
 

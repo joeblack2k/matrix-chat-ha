@@ -24,6 +24,7 @@ DEFAULT_MAX_UPLOAD_MB = 200.0
 
 SERVICE_SEND_MESSAGE = "send_message"
 SERVICE_SEND_MEDIA = "send_media"
+SERVICE_SEND_REACTION = "send_reaction"
 
 ATTR_ENTRY_ID = "entry_id"
 ATTR_TARGET = "target"
@@ -35,6 +36,10 @@ ATTR_MIME_TYPE = "mime_type"
 ATTR_AUTO_CONVERT = "auto_convert"
 ATTR_CONVERT_THRESHOLD_MB = "convert_threshold_mb"
 ATTR_MAX_SIZE_MB = "max_size_mb"
+ATTR_REPLY_TO_EVENT_ID = "reply_to_event_id"
+ATTR_EDIT_EVENT_ID = "edit_event_id"
+ATTR_EVENT_ID = "event_id"
+ATTR_REACTION_KEY = "reaction_key"
 
 FORMAT_TEXT = "text"
 FORMAT_HTML = "html"

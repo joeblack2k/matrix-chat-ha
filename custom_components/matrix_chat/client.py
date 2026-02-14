@@ -444,7 +444,12 @@ class MatrixChatClient:
         return event_id
 
     async def _send_encrypted_gateway_text(
-        self, room_id: str, message: str, message_format: str
+        self,
+        room_id: str,
+        message: str,
+        message_format: str,
+        reply_to_event_id: str = "",
+        edit_event_id: str = "",
     ) -> str:
         if not self.encrypted_webhook_url and not self._gateway_base_urls():
             raise MatrixChatError(
@@ -459,6 +464,8 @@ class MatrixChatClient:
             "room_id": room_id,
             "message": message,
             "format": message_format,
+            "reply_to_event_id": reply_to_event_id,
+            "edit_event_id": edit_event_id,
         }
 
         errors: list[str] = []
@@ -483,6 +490,47 @@ class MatrixChatClient:
                 errors.append(f"{url} -> {err}")
 
         raise MatrixChatError(f"Encrypted gateway text failed: {' | '.join(errors)}")
+
+    async def _send_encrypted_gateway_reaction(
+        self, room_id: str, event_id: str, reaction_key: str
+    ) -> str:
+        if not self.encrypted_webhook_url and not self._gateway_base_urls():
+            raise MatrixChatError(
+                f"Room {room_id} is encrypted and no encrypted gateway URL is configured"
+            )
+
+        headers = {"Content-Type": "application/json"}
+        if self.encrypted_webhook_token:
+            headers["Authorization"] = f"Bearer {self.encrypted_webhook_token}"
+
+        payload = {
+            "room_id": room_id,
+            "event_id": event_id,
+            "reaction_key": reaction_key,
+        }
+
+        errors: list[str] = []
+        for base_url in self._gateway_base_urls():
+            url = f"{base_url}/send_reaction"
+            try:
+                async with self._session.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    ssl=self._ssl_arg,
+                ) as resp:
+                    text = await resp.text()
+                    if 200 <= resp.status < 300:
+                        try:
+                            data = json.loads(text) if text else {}
+                        except json.JSONDecodeError:
+                            data = {}
+                        return data.get("event_id", "")
+                    errors.append(f"{url} -> HTTP {resp.status}: {text[:250]}")
+            except ClientError as err:
+                errors.append(f"{url} -> {err}")
+
+        raise MatrixChatError(f"Encrypted gateway reaction failed: {' | '.join(errors)}")
 
     async def _send_encrypted_gateway_media(
         self,
@@ -545,13 +593,59 @@ class MatrixChatClient:
 
         raise MatrixChatError(f"Encrypted gateway media failed: {' | '.join(errors)}")
 
+    def _build_message_content(
+        self,
+        message: str,
+        message_format: str,
+        reply_to_event_id: str,
+        edit_event_id: str,
+    ) -> dict[str, Any]:
+        if reply_to_event_id and edit_event_id:
+            raise MatrixChatError("reply_to_event_id and edit_event_id are mutually exclusive")
+
+        base_content: dict[str, Any] = {"msgtype": "m.text", "body": message}
+        if message_format == FORMAT_HTML:
+            base_content["format"] = "org.matrix.custom.html"
+            base_content["formatted_body"] = message
+
+        if reply_to_event_id:
+            base_content["m.relates_to"] = {
+                "m.in_reply_to": {"event_id": reply_to_event_id}
+            }
+            return base_content
+
+        if edit_event_id:
+            edit_content = {
+                "msgtype": "m.text",
+                "body": f"* {message}",
+                "m.new_content": dict(base_content),
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": edit_event_id,
+                },
+            }
+            if message_format == FORMAT_HTML:
+                edit_content["format"] = "org.matrix.custom.html"
+                edit_content["formatted_body"] = f"* {message}"
+            return edit_content
+
+        return base_content
+
     async def async_send_message(
         self,
         targets: list[str],
         message: str,
         message_format: str,
+        reply_to_event_id: str = "",
+        edit_event_id: str = "",
     ) -> dict[str, Any]:
         results: list[dict[str, Any]] = []
+        content = self._build_message_content(
+            message=message,
+            message_format=message_format,
+            reply_to_event_id=reply_to_event_id,
+            edit_event_id=edit_event_id,
+        )
 
         for target in targets:
             try:
@@ -560,7 +654,11 @@ class MatrixChatClient:
 
                 if encrypted:
                     event_id = await self._send_encrypted_gateway_text(
-                        room_id, message, message_format
+                        room_id=room_id,
+                        message=message,
+                        message_format=message_format,
+                        reply_to_event_id=reply_to_event_id,
+                        edit_event_id=edit_event_id,
                     )
                     results.append(
                         {
@@ -574,14 +672,6 @@ class MatrixChatClient:
                         }
                     )
                     continue
-
-                content: dict[str, Any] = {
-                    "msgtype": "m.text",
-                    "body": message,
-                }
-                if message_format == FORMAT_HTML:
-                    content["format"] = "org.matrix.custom.html"
-                    content["formatted_body"] = message
 
                 event_id = await self._send_room_event(room_id, "m.room.message", content)
                 results.append(
@@ -597,6 +687,76 @@ class MatrixChatClient:
                 )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.exception("Failed sending message to target %s", target)
+                results.append(
+                    {
+                        "target": target,
+                        "status": "failed",
+                        "error": str(err),
+                    }
+                )
+
+        success_count = sum(1 for item in results if item.get("status") == "sent")
+        return {
+            "results": results,
+            "success_count": success_count,
+            "failure_count": len(results) - success_count,
+        }
+
+    async def async_send_reaction(
+        self,
+        targets: list[str],
+        event_id: str,
+        reaction_key: str,
+    ) -> dict[str, Any]:
+        content: dict[str, Any] = {
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": event_id,
+                "key": reaction_key,
+            }
+        }
+
+        results: list[dict[str, Any]] = []
+        for target in targets:
+            try:
+                room_id, target_type = await self._resolve_target_to_room(target)
+                encrypted = await self._is_room_encrypted(room_id)
+
+                if encrypted:
+                    reaction_event_id = await self._send_encrypted_gateway_reaction(
+                        room_id=room_id,
+                        event_id=event_id,
+                        reaction_key=reaction_key,
+                    )
+                    results.append(
+                        {
+                            "target": target,
+                            "target_type": target_type,
+                            "room_id": room_id,
+                            "event_id": reaction_event_id,
+                            "transport": "encrypted_gateway",
+                            "encrypted": True,
+                            "status": "sent",
+                        }
+                    )
+                    continue
+
+                reaction_event_id = await self._send_room_event(
+                    room_id, "m.reaction", content
+                )
+                results.append(
+                    {
+                        "target": target,
+                        "target_type": target_type,
+                        "room_id": room_id,
+                        "event_id": reaction_event_id,
+                        "transport": "direct",
+                        "encrypted": False,
+                        "status": "sent",
+                    }
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.exception("Failed sending reaction to target %s", target)
                 results.append(
                     {
                         "target": target,

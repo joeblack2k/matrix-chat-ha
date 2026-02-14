@@ -24,12 +24,16 @@ from .client import (
 from .const import (
     ATTR_AUTO_CONVERT,
     ATTR_CONVERT_THRESHOLD_MB,
+    ATTR_EDIT_EVENT_ID,
     ATTR_ENTRY_ID,
+    ATTR_EVENT_ID,
     ATTR_FILE_PATH,
     ATTR_FORMAT,
     ATTR_MAX_SIZE_MB,
     ATTR_MESSAGE,
     ATTR_MIME_TYPE,
+    ATTR_REACTION_KEY,
+    ATTR_REPLY_TO_EVENT_ID,
     ATTR_TARGET,
     ATTR_TARGETS,
     CONF_ACCESS_TOKEN,
@@ -52,6 +56,7 @@ from .const import (
     FORMAT_TEXT,
     SERVICE_SEND_MEDIA,
     SERVICE_SEND_MESSAGE,
+    SERVICE_SEND_REACTION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +91,8 @@ SERVICE_SEND_MESSAGE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TARGETS): vol.Any(cv.string, [cv.string]),
         vol.Required(ATTR_MESSAGE): cv.string,
         vol.Optional(ATTR_FORMAT, default=FORMAT_TEXT): vol.In([FORMAT_TEXT, FORMAT_HTML]),
+        vol.Optional(ATTR_REPLY_TO_EVENT_ID): cv.string,
+        vol.Optional(ATTR_EDIT_EVENT_ID): cv.string,
     }
 )
 
@@ -100,6 +107,16 @@ SERVICE_SEND_MEDIA_SCHEMA = vol.Schema(
         vol.Optional(ATTR_AUTO_CONVERT): cv.boolean,
         vol.Optional(ATTR_CONVERT_THRESHOLD_MB): vol.Coerce(float),
         vol.Optional(ATTR_MAX_SIZE_MB): vol.Coerce(float),
+    }
+)
+
+SERVICE_SEND_REACTION_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_TARGET): cv.string,
+        vol.Optional(ATTR_TARGETS): vol.Any(cv.string, [cv.string]),
+        vol.Required(ATTR_EVENT_ID): cv.string,
+        vol.Required(ATTR_REACTION_KEY): cv.string,
     }
 )
 
@@ -184,6 +201,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_SEND_MESSAGE)
         if hass.services.has_service(DOMAIN, SERVICE_SEND_MEDIA):
             hass.services.async_remove(DOMAIN, SERVICE_SEND_MEDIA)
+        if hass.services.has_service(DOMAIN, SERVICE_SEND_REACTION):
+            hass.services.async_remove(DOMAIN, SERVICE_SEND_REACTION)
         hass.data[DOMAIN]["services_registered"] = False
 
     return True
@@ -241,12 +260,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         targets = _extract_targets(call.data)
         if not targets:
             raise HomeAssistantError("Provide target or targets")
+        if call.data.get(ATTR_REPLY_TO_EVENT_ID) and call.data.get(ATTR_EDIT_EVENT_ID):
+            raise HomeAssistantError(
+                "reply_to_event_id and edit_event_id cannot be used together"
+            )
 
         client = _select_client(hass, call.data.get(ATTR_ENTRY_ID))
         result = await client.async_send_message(
             targets=targets,
             message=call.data[ATTR_MESSAGE],
             message_format=call.data.get(ATTR_FORMAT, FORMAT_TEXT),
+            reply_to_event_id=call.data.get(ATTR_REPLY_TO_EVENT_ID, ""),
+            edit_event_id=call.data.get(ATTR_EDIT_EVENT_ID, ""),
         )
         return result
 
@@ -269,6 +294,19 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         )
         return result
 
+    async def _handle_send_reaction(call: ServiceCall) -> ServiceResponse:
+        targets = _extract_targets(call.data)
+        if not targets:
+            raise HomeAssistantError("Provide target or targets")
+
+        client = _select_client(hass, call.data.get(ATTR_ENTRY_ID))
+        result = await client.async_send_reaction(
+            targets=targets,
+            event_id=call.data[ATTR_EVENT_ID],
+            reaction_key=call.data[ATTR_REACTION_KEY],
+        )
+        return result
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_SEND_MESSAGE,
@@ -282,6 +320,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_SEND_MEDIA,
         _handle_send_media,
         schema=SERVICE_SEND_MEDIA_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND_REACTION,
+        _handle_send_reaction,
+        schema=SERVICE_SEND_REACTION_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

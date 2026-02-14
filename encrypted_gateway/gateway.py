@@ -261,14 +261,61 @@ class MatrixE2EEGateway:
         )
         return not isinstance(state_response, RoomGetStateEventError)
 
-    async def send_text(self, room_id: str, message: str, message_format: str) -> str:
-        assert self._client is not None
+    def _build_message_content(
+        self,
+        message: str,
+        message_format: str,
+        reply_to_event_id: str,
+        edit_event_id: str,
+    ) -> dict[str, Any]:
+        if reply_to_event_id and edit_event_id:
+            raise GatewayError("reply_to_event_id and edit_event_id are mutually exclusive")
 
-        await self._ensure_joined(room_id)
         content: dict[str, Any] = {"msgtype": "m.text", "body": message}
         if message_format == "html":
             content["format"] = "org.matrix.custom.html"
             content["formatted_body"] = message
+
+        if reply_to_event_id:
+            content["m.relates_to"] = {
+                "m.in_reply_to": {"event_id": reply_to_event_id}
+            }
+            return content
+
+        if edit_event_id:
+            edit_content: dict[str, Any] = {
+                "msgtype": "m.text",
+                "body": f"* {message}",
+                "m.new_content": dict(content),
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": edit_event_id,
+                },
+            }
+            if message_format == "html":
+                edit_content["format"] = "org.matrix.custom.html"
+                edit_content["formatted_body"] = f"* {message}"
+            return edit_content
+
+        return content
+
+    async def send_text(
+        self,
+        room_id: str,
+        message: str,
+        message_format: str,
+        reply_to_event_id: str = "",
+        edit_event_id: str = "",
+    ) -> str:
+        assert self._client is not None
+
+        await self._ensure_joined(room_id)
+        content = self._build_message_content(
+            message=message,
+            message_format=message_format,
+            reply_to_event_id=reply_to_event_id,
+            edit_event_id=edit_event_id,
+        )
 
         async with self._send_lock:
             response = await self._client.room_send(
@@ -284,6 +331,34 @@ class MatrixE2EEGateway:
                     f"Send text failed {response.status_code}: {response.message}"
                 )
             raise GatewayError("Send text failed with unknown response")
+        return response.event_id
+
+    async def send_reaction(self, room_id: str, event_id: str, reaction_key: str) -> str:
+        assert self._client is not None
+        await self._ensure_joined(room_id)
+
+        content: dict[str, Any] = {
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": event_id,
+                "key": reaction_key,
+            }
+        }
+
+        async with self._send_lock:
+            response = await self._client.room_send(
+                room_id=room_id,
+                message_type="m.reaction",
+                content=content,
+                ignore_unverified_devices=self.ignore_unverified_devices,
+            )
+
+        if not isinstance(response, RoomSendResponse):
+            if isinstance(response, RoomSendError):
+                raise GatewayError(
+                    f"Send reaction failed {response.status_code}: {response.message}"
+                )
+            raise GatewayError("Send reaction failed with unknown response")
         return response.event_id
 
     async def send_media(
@@ -435,6 +510,8 @@ async def create_app() -> web.Application:
         room_id = (payload.get("room_id") or "").strip()
         message = str(payload.get("message") or "")
         message_format = str(payload.get("format") or "text").strip().lower()
+        reply_to_event_id = str(payload.get("reply_to_event_id") or "").strip()
+        edit_event_id = str(payload.get("edit_event_id") or "").strip()
 
         if not room_id:
             raise GatewayError("room_id is required")
@@ -442,13 +519,37 @@ async def create_app() -> web.Application:
             raise GatewayError("message is required")
         if message_format not in {"text", "html"}:
             raise GatewayError("format must be 'text' or 'html'")
+        if reply_to_event_id and edit_event_id:
+            raise GatewayError("reply_to_event_id and edit_event_id are mutually exclusive")
 
         event_id = await gateway.send_text(
             room_id=room_id,
             message=message,
             message_format=message_format,
+            reply_to_event_id=reply_to_event_id,
+            edit_event_id=edit_event_id,
         )
         return web.json_response({"event_id": event_id})
+
+    async def send_reaction(request: web.Request) -> web.Response:
+        payload = await request.json()
+        room_id = str(payload.get("room_id") or "").strip()
+        event_id = str(payload.get("event_id") or "").strip()
+        reaction_key = str(payload.get("reaction_key") or "").strip()
+
+        if not room_id:
+            raise GatewayError("room_id is required")
+        if not event_id:
+            raise GatewayError("event_id is required")
+        if not reaction_key:
+            raise GatewayError("reaction_key is required")
+
+        reaction_event_id = await gateway.send_reaction(
+            room_id=room_id,
+            event_id=event_id,
+            reaction_key=reaction_key,
+        )
+        return web.json_response({"event_id": reaction_event_id})
 
     async def send_media(request: web.Request) -> web.Response:
         post = await request.post()
@@ -491,6 +592,7 @@ async def create_app() -> web.Application:
     app.router.add_get("/health", health)
     app.router.add_post("/send_text", send_text)
     app.router.add_post("/send_media", send_media)
+    app.router.add_post("/send_reaction", send_reaction)
 
     return app
 

@@ -37,6 +37,18 @@ send_message:
           options:
             - text
             - html
+    reply_to_event_id:
+      name: Reply to event ID
+      description: Optional Matrix event ID to send this message as a reply.
+      example: "$abc123def456:matrix.example.org"
+      selector:
+        text:
+    edit_event_id:
+      name: Edit event ID
+      description: Optional Matrix event ID to edit (m.replace). Mutually exclusive with reply_to_event_id.
+      example: "$abc123def456:matrix.example.org"
+      selector:
+        text:
 
 send_media:
   name: Send Matrix media
@@ -101,3 +113,41 @@ send_media:
           min: 1
           max: 4096
           mode: box
+
+send_reaction:
+  name: Send Matrix reaction
+  description: Send a reaction (emoji/key) to an existing Matrix event.
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    target:
+      name: Target
+      description: Single target room or user, for example !roomid:server, #alias:server or @user:server.
+      example: "@user:matrix.example.org"
+      selector:
+        text:
+    targets:
+      name: Targets
+      description: List of targets, each !roomid:server, #alias:server or @user:server.
+      example:
+        - "@user:matrix.example.org"
+      selector:
+        object:
+    event_id:
+      name: Event ID
+      description: Matrix event ID to react to.
+      required: true
+      example: "$abc123def456:matrix.example.org"
+      selector:
+        text:
+    reaction_key:
+      name: Reaction key
+      description: Emoji or key used as reaction.
+      required: true
+      example: "👍"
+      selector:
+        text:

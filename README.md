@@ -5,6 +5,8 @@
 ## Features
 - Send text messages to Matrix rooms and users (DM auto-create for `@user:server` targets)
 - Send images, videos and files
+- Reply to messages and edit previously sent messages
+- Send reactions to existing events
 - Automatic video conversion (MP4 H.264/AAC) above configurable threshold
 - Room alias (`#alias:server`) and room ID (`!room:server`) support
 - Optional encrypted gateway fallback for encrypted rooms (text and media)
@@ -50,12 +52,19 @@ matrix_chat:
 - `target` or `targets`
 - `message`
 - `format` (`text` or `html`)
+- optional `reply_to_event_id` (reply)
+- optional `edit_event_id` (edit/replace)
 
 ### `matrix_chat.send_media`
 - `target` or `targets`
 - `file_path`
 - optional `message`, `mime_type`
 - optional conversion/upload controls
+
+### `matrix_chat.send_reaction`
+- `target` or `targets`
+- `event_id`
+- `reaction_key` (emoji/key)
 
 ## Encrypted Rooms (Element X / lock icon)
 Home Assistant runtime usually lacks `olm`, so encrypted Matrix send in-process is not reliable.
@@ -100,3 +109,33 @@ Validated live on 2026-02-14:
 - mp4 video sent
 
 All three were delivered successfully via `matrix_chat` services to a real Matrix user target.
+
+## Roadmap
+### MVP+ (current sprint)
+- Reply support (`m.in_reply_to`) for text messages
+- Edit support (`m.replace`) for text messages
+- Reaction support (`m.reaction`) with emoji/key
+- Keep encrypted gateway as default transport for encrypted rooms
+
+Acceptance:
+- Reply appears as threaded reply in Element/Element X
+- Edited message shows as edited and preserves latest content
+- Reaction is visible on target event
+
+### V1 (next)
+- Inbound Matrix events to Home Assistant events/webhooks (2-way bot)
+- Delivery reliability: persistent retry queue with backoff
+- Diagnostics entities/sensors (success/fail counters, latency, gateway health)
+
+Acceptance:
+- Incoming DM/room message can trigger HA automation
+- Temporary network errors are retried without message loss
+
+### V2
+- Advanced media UX: thumbnails/posters/voice-note handling
+- Message lifecycle controls (redact/delete by event_id)
+- Optional room/contact aliases and templated routing profiles
+
+Acceptance:
+- Media preview quality improves on mobile clients
+- Admin can remove sent events with service call
