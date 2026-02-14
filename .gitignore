@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual envs
+.venv/
+venv/
+
+# Local secrets / env files
+.env
+.env.*
+*.secret
+secrets.*
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

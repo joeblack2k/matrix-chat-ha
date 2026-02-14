@@ -1,0 +1,31 @@
+{
+  "title": "Matrix Chat",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Matrix Chat",
+        "description": "Configure Matrix homeserver and bot account credentials.",
+        "data": {
+          "homeserver": "Homeserver URL",
+          "user_id": "Bot user ID (MXID)",
+          "password": "Password",
+          "access_token": "Access token (optional)",
+          "verify_ssl": "Verify TLS certificate",
+          "encrypted_webhook_url": "Encrypted-room webhook URL (optional)",
+          "encrypted_webhook_token": "Encrypted-room webhook token (optional)",
+          "auto_convert_video": "Auto-convert large videos",
+          "video_convert_threshold_mb": "Video convert threshold (MB)",
+          "max_upload_mb": "Max upload size (MB)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to Matrix homeserver.",
+      "invalid_auth": "Authentication failed.",
+      "missing_auth": "Provide a password or an access token."
+    },
+    "abort": {
+      "already_configured": "This Matrix bot is already configured."
+    }
+  }
+}

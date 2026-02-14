@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420">
+  <defs>
+    <linearGradient id="hero" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f2a43"/>
+      <stop offset="1" stop-color="#1b6ca8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="420" rx="36" fill="#0b1d2d"/>
+  <rect x="24" y="24" width="1152" height="372" rx="28" fill="url(#hero)"/>
+  <path d="M70 90h28v240H70zM320 90h28v240h-28z" fill="#e9f4ff"/>
+  <path d="M130 132h154c18 0 32 14 32 32v94c0 18-14 32-32 32h-84l-44 32v-32h-26c-18 0-32-14-32-32v-94c0-18 14-32 32-32z" fill="#fff"/>
+  <circle cx="170" cy="211" r="10" fill="#1b6ca8"/>
+  <circle cx="208" cy="211" r="10" fill="#1b6ca8"/>
+  <circle cx="246" cy="211" r="10" fill="#1b6ca8"/>
+  <text x="390" y="190" fill="#ffffff" font-size="74" font-family="'Segoe UI', 'Arial', sans-serif" font-weight="700">Matrix Chat</text>
+  <text x="390" y="252" fill="#d7ebff" font-size="36" font-family="'Segoe UI', 'Arial', sans-serif">Home Assistant custom integration for text, image and video delivery</text>
+</svg>

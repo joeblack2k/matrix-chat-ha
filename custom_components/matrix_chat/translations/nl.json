@@ -1,0 +1,31 @@
+{
+  "title": "Matrix Chat",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Matrix Chat",
+        "description": "Configureer Matrix homeserver en bot-accountgegevens.",
+        "data": {
+          "homeserver": "Homeserver URL",
+          "user_id": "Bot user ID (MXID)",
+          "password": "Wachtwoord",
+          "access_token": "Access token (optioneel)",
+          "verify_ssl": "TLS-certificaat controleren",
+          "encrypted_webhook_url": "Webhook URL voor encrypted rooms (optioneel)",
+          "encrypted_webhook_token": "Webhook token voor encrypted rooms (optioneel)",
+          "auto_convert_video": "Grote video's automatisch converteren",
+          "video_convert_threshold_mb": "Video conversiedrempel (MB)",
+          "max_upload_mb": "Maximale uploadgrootte (MB)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan geen verbinding maken met de Matrix homeserver.",
+      "invalid_auth": "Authenticatie mislukt.",
+      "missing_auth": "Geef een wachtwoord of access token op."
+    },
+    "abort": {
+      "already_configured": "Deze Matrix bot is al geconfigureerd."
+    }
+  }
+}

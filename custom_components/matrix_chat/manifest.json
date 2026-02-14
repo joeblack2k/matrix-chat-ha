@@ -1,0 +1,12 @@
+{
+  "domain": "matrix_chat",
+  "name": "Matrix Chat",
+  "codeowners": ["@nijssen"],
+  "config_flow": true,
+  "documentation": "https://github.com/nijssen/matrix-chat-ha",
+  "integration_type": "service",
+  "iot_class": "cloud_push",
+  "loggers": ["custom_components.matrix_chat"],
+  "requirements": [],
+  "version": "0.1.0"
+}

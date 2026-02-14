@@ -1,0 +1,103 @@
+send_message:
+  name: Send Matrix message
+  description: Send a text message to Matrix rooms and/or users (direct messages).
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    target:
+      name: Target
+      description: Single target, for example !roomid:server, #alias:server or @user:server.
+      example: "@user:matrix.example.org"
+      selector:
+        text:
+    targets:
+      name: Targets
+      description: List of targets, each !roomid:server, #alias:server or @user:server.
+      example:
+        - "@user:matrix.example.org"
+        - "!abc123def456:matrix.example.org"
+      selector:
+        object:
+    message:
+      name: Message
+      description: Message body to send.
+      required: true
+      selector:
+        text:
+    format:
+      name: Format
+      description: Message format.
+      default: text
+      selector:
+        select:
+          options:
+            - text
+            - html
+
+send_media:
+  name: Send Matrix media
+  description: Send an image, video, or file to Matrix rooms and/or users (direct messages).
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    target:
+      name: Target
+      description: Single target, for example !roomid:server, #alias:server or @user:server.
+      example: "@user:matrix.example.org"
+      selector:
+        text:
+    targets:
+      name: Targets
+      description: List of targets, each !roomid:server, #alias:server or @user:server.
+      example:
+        - "@user:matrix.example.org"
+      selector:
+        object:
+    file_path:
+      name: File path
+      description: Absolute file path on Home Assistant host, e.g. /config/www/photo.jpg.
+      required: true
+      selector:
+        text:
+    message:
+      name: Caption
+      description: Optional caption/body shown with media.
+      selector:
+        text:
+    mime_type:
+      name: MIME type
+      description: Optional override; auto-detected if omitted.
+      selector:
+        text:
+    auto_convert:
+      name: Auto-convert video
+      description: Convert large videos to MP4 (H.264/AAC) for better compatibility.
+      default: true
+      selector:
+        boolean:
+    convert_threshold_mb:
+      name: Convert threshold (MB)
+      description: Convert videos larger than this size.
+      default: 20
+      selector:
+        number:
+          min: 1
+          max: 1024
+          mode: box
+    max_size_mb:
+      name: Max upload size (MB)
+      description: Service-level max file size before upload.
+      default: 200
+      selector:
+        number:
+          min: 1
+          max: 4096
+          mode: box
