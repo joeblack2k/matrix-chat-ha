@@ -328,6 +328,12 @@ class MatrixE2EEGateway:
             if not isinstance(maybe_keys, dict):
                 raise GatewayError("Encrypted upload missing decryption keys")
             content["file"] = maybe_keys
+            # Element X currently expects top-level url to be present as well.
+            encrypted_url = maybe_keys.get("url")
+            if isinstance(encrypted_url, str) and encrypted_url:
+                content["url"] = encrypted_url
+            elif upload_response.content_uri:
+                content["url"] = upload_response.content_uri
         else:
             content["url"] = upload_response.content_uri
 
