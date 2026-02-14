@@ -11,8 +11,9 @@
           "password": "Password",
           "access_token": "Access token (optional)",
           "verify_ssl": "Verify TLS certificate",
-          "encrypted_webhook_url": "Encrypted-room webhook URL (optional)",
-          "encrypted_webhook_token": "Encrypted-room webhook token (optional)",
+          "encrypted_webhook_url": "Encrypted gateway URL (optional)",
+          "encrypted_webhook_token": "Encrypted gateway token (optional)",
+          "dm_encrypted": "Create encrypted direct messages",
           "auto_convert_video": "Auto-convert large videos",
           "video_convert_threshold_mb": "Video convert threshold (MB)",
           "max_upload_mb": "Max upload size (MB)"

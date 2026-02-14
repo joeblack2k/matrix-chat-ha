@@ -14,8 +14,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from aiohttp import ClientError, ClientSession
+from aiohttp import ClientError, ClientSession, FormData
 from homeassistant.helpers.storage import Store
+from PIL import Image
 
 from .const import DOMAIN, FORMAT_HTML
 
@@ -41,6 +42,19 @@ def _normalize_token(token: str | None) -> str:
     if out.lower().startswith("bearer "):
         out = out[7:].strip()
     return out
+
+
+def _media_msgtype(mime_type: str) -> str:
+    if mime_type.startswith("image/"):
+        return "m.image"
+    if mime_type.startswith("video/"):
+        return "m.video"
+    return "m.file"
+
+
+def _image_dimensions(path: Path) -> tuple[int, int]:
+    with Image.open(path) as img:
+        return img.size
 
 
 async def async_validate_credentials(
@@ -120,6 +134,7 @@ class MatrixChatClient:
         verify_ssl: bool,
         encrypted_webhook_url: str,
         encrypted_webhook_token: str,
+        dm_encrypted: bool,
         auto_convert_video: bool,
         video_convert_threshold_mb: float,
         max_upload_mb: float,
@@ -136,6 +151,7 @@ class MatrixChatClient:
 
         self.encrypted_webhook_url = (encrypted_webhook_url or "").strip()
         self.encrypted_webhook_token = (encrypted_webhook_token or "").strip()
+        self.dm_encrypted = bool(dm_encrypted)
 
         self.auto_convert_video = bool(auto_convert_video)
         self.video_convert_threshold_mb = float(video_convert_threshold_mb)
@@ -147,6 +163,18 @@ class MatrixChatClient:
         self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_cache")
         self._dm_rooms: dict[str, str] = {}
         self._encrypted_rooms: dict[str, bool] = {}
+
+    def _gateway_base_urls(self) -> list[str]:
+        urls: list[str] = []
+        configured = (self.encrypted_webhook_url or "").rstrip("/")
+        if configured:
+            urls.append(configured)
+
+        # Docker-network fallback for Home Assistant Container deployments.
+        fallback = "http://matrix-e2ee-gateway:8080"
+        if fallback not in urls:
+            urls.append(fallback)
+        return urls
 
     async def async_initialize(self) -> None:
         """Load cache and verify credentials."""
@@ -260,16 +288,47 @@ class MatrixChatClient:
             raise MatrixChatError(f"Could not resolve room alias: {room_alias}")
         return room_id
 
-    async def _resolve_dm_room(self, target_user: str) -> str:
-        if target_user in self._dm_rooms:
-            return self._dm_rooms[target_user]
+    async def _get_direct_rooms_map(self) -> dict[str, list[str]]:
+        user_enc = urllib.parse.quote(self.user_id, safe="")
+        data = await self._request_json(
+            "GET",
+            f"/_matrix/client/v3/user/{user_enc}/account_data/m.direct",
+            expected=(200,),
+            allow_404=True,
+        )
+        if not isinstance(data, dict):
+            return {}
 
-        payload = {
+        out: dict[str, list[str]] = {}
+        for user, rooms in data.items():
+            if isinstance(user, str) and isinstance(rooms, list):
+                out[user] = [room for room in rooms if isinstance(room, str)]
+        return out
+
+    async def _put_direct_rooms_map(self, mapping: dict[str, list[str]]) -> None:
+        user_enc = urllib.parse.quote(self.user_id, safe="")
+        await self._request_json(
+            "PUT",
+            f"/_matrix/client/v3/user/{user_enc}/account_data/m.direct",
+            payload=mapping,
+            expected=(200,),
+        )
+
+    async def _create_dm_room(self, target_user: str, encrypted: bool) -> str:
+        payload: dict[str, Any] = {
             "is_direct": True,
             "invite": [target_user],
-            "preset": "trusted_private_chat",
-            "name": f"DM with {target_user}",
+            "preset": "private_chat",
         }
+        if encrypted:
+            payload["initial_state"] = [
+                {
+                    "type": "m.room.encryption",
+                    "state_key": "",
+                    "content": {"algorithm": "m.megolm.v1.aes-sha2"},
+                }
+            ]
+
         data = await self._request_json(
             "POST",
             "/_matrix/client/v3/createRoom",
@@ -279,6 +338,56 @@ class MatrixChatClient:
         room_id = (data or {}).get("room_id", "")
         if not room_id:
             raise MatrixChatError(f"Could not create DM room for {target_user}")
+        self._encrypted_rooms[room_id] = encrypted
+        return room_id
+
+    async def _pick_direct_room(self, room_ids: list[str]) -> str | None:
+        if not room_ids:
+            return None
+
+        encrypted_candidates: list[str] = []
+        plain_candidates: list[str] = []
+        for room_id in room_ids:
+            try:
+                if await self._is_room_encrypted(room_id):
+                    encrypted_candidates.append(room_id)
+                else:
+                    plain_candidates.append(room_id)
+            except Exception:
+                plain_candidates.append(room_id)
+
+        if self.dm_encrypted:
+            if encrypted_candidates:
+                return encrypted_candidates[0]
+            return None
+
+        if encrypted_candidates:
+            return encrypted_candidates[0]
+        if plain_candidates:
+            return plain_candidates[0]
+        return None
+
+    async def _resolve_dm_room(self, target_user: str) -> str:
+        cached = self._dm_rooms.get(target_user)
+        if cached:
+            if self.dm_encrypted:
+                if await self._is_room_encrypted(cached):
+                    return cached
+            else:
+                return cached
+
+        direct_map = await self._get_direct_rooms_map()
+        room_ids = direct_map.get(target_user, [])
+        selected = await self._pick_direct_room(room_ids)
+        if selected:
+            self._dm_rooms[target_user] = selected
+            await self.async_persist_cache()
+            return selected
+
+        room_id = await self._create_dm_room(target_user, encrypted=self.dm_encrypted)
+        merged = [room_id] + [r for r in room_ids if r != room_id]
+        direct_map[target_user] = merged
+        await self._put_direct_rooms_map(direct_map)
 
         self._dm_rooms[target_user] = room_id
         await self.async_persist_cache()
@@ -335,12 +444,12 @@ class MatrixChatClient:
             raise MatrixChatError(f"Matrix did not return event_id for room {room_id}")
         return event_id
 
-    async def _send_encrypted_webhook_message(
+    async def _send_encrypted_gateway_text(
         self, room_id: str, message: str, message_format: str
     ) -> str:
-        if not self.encrypted_webhook_url:
+        if not self.encrypted_webhook_url and not self._gateway_base_urls():
             raise MatrixChatError(
-                f"Room {room_id} is encrypted and no encrypted webhook URL is configured"
+                f"Room {room_id} is encrypted and no encrypted gateway URL is configured"
             )
 
         headers = {"Content-Type": "application/json"}
@@ -349,27 +458,93 @@ class MatrixChatClient:
 
         payload = {
             "room_id": room_id,
-            "sender": self.user_id,
             "message": message,
             "format": message_format,
         }
 
-        async with self._session.post(
-            self.encrypted_webhook_url,
-            json=payload,
-            headers=headers,
-            ssl=self._ssl_arg,
-        ) as resp:
-            text = await resp.text()
-            if 200 <= resp.status < 300:
-                try:
-                    data = json.loads(text) if text else {}
-                except json.JSONDecodeError:
-                    data = {}
-                return data.get("event_id", "")
+        errors: list[str] = []
+        for base_url in self._gateway_base_urls():
+            url = f"{base_url}/send_text"
+            try:
+                async with self._session.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    ssl=self._ssl_arg,
+                ) as resp:
+                    text = await resp.text()
+                    if 200 <= resp.status < 300:
+                        try:
+                            data = json.loads(text) if text else {}
+                        except json.JSONDecodeError:
+                            data = {}
+                        return data.get("event_id", "")
+                    errors.append(f"{url} -> HTTP {resp.status}: {text[:250]}")
+            except ClientError as err:
+                errors.append(f"{url} -> {err}")
+
+        raise MatrixChatError(f"Encrypted gateway text failed: {' | '.join(errors)}")
+
+    async def _send_encrypted_gateway_media(
+        self,
+        room_id: str,
+        file_path: Path,
+        mime_type: str,
+        msgtype: str,
+        body: str,
+        caption: str,
+        info: dict[str, Any],
+    ) -> str:
+        if not self.encrypted_webhook_url and not self._gateway_base_urls():
             raise MatrixChatError(
-                f"Encrypted webhook failed HTTP {resp.status}: {text[:500]}"
+                f"Room {room_id} is encrypted and no encrypted gateway URL is configured"
             )
+
+        headers: dict[str, str] = {}
+        if self.encrypted_webhook_token:
+            headers["Authorization"] = f"Bearer {self.encrypted_webhook_token}"
+
+        file_bytes = await self.hass.async_add_executor_job(file_path.read_bytes)
+        errors: list[str] = []
+        for base_url in self._gateway_base_urls():
+            form = FormData()
+            form.add_field("room_id", room_id)
+            form.add_field("msgtype", msgtype)
+            form.add_field("body", body)
+            form.add_field("caption", caption or "")
+            form.add_field("mime_type", mime_type)
+            form.add_field("info", json.dumps(info))
+            form.add_field(
+                "file",
+                file_bytes,
+                filename=file_path.name,
+                content_type=mime_type,
+            )
+            url = f"{base_url}/send_media"
+            try:
+                async with self._session.post(
+                    url,
+                    data=form,
+                    headers=headers,
+                    ssl=self._ssl_arg,
+                ) as resp:
+                    text = await resp.text()
+                    if 200 <= resp.status < 300:
+                        try:
+                            data = json.loads(text) if text else {}
+                        except json.JSONDecodeError:
+                            data = {}
+                        event_id = data.get("event_id", "")
+                        if not event_id:
+                            raise MatrixChatError(
+                                "Encrypted gateway media response missing event_id"
+                            )
+                        return event_id
+                    errors.append(f"{url} -> HTTP {resp.status}: {text[:250]}")
+            except ClientError as err:
+                errors.append(f"{url} -> {err}")
+
+        raise MatrixChatError(f"Encrypted gateway media failed: {' | '.join(errors)}")
 
     async def async_send_message(
         self,
@@ -385,7 +560,7 @@ class MatrixChatClient:
                 encrypted = await self._is_room_encrypted(room_id)
 
                 if encrypted:
-                    event_id = await self._send_encrypted_webhook_message(
+                    event_id = await self._send_encrypted_gateway_text(
                         room_id, message, message_format
                     )
                     results.append(
@@ -394,7 +569,8 @@ class MatrixChatClient:
                             "target_type": target_type,
                             "room_id": room_id,
                             "event_id": event_id,
-                            "transport": "encrypted_webhook",
+                            "transport": "encrypted_gateway",
+                            "encrypted": True,
                             "status": "sent",
                         }
                     )
@@ -416,6 +592,7 @@ class MatrixChatClient:
                         "room_id": room_id,
                         "event_id": event_id,
                         "transport": "direct",
+                        "encrypted": False,
                         "status": "sent",
                     }
                 )
@@ -526,24 +703,83 @@ class MatrixChatClient:
         }
 
         url = f"{self.homeserver}{upload_path}"
-        with path.open("rb") as handle:
-            async with self._session.post(
-                url,
-                headers=headers,
-                data=handle,
-                ssl=self._ssl_arg,
-            ) as resp:
-                text = await resp.text()
-                if resp.status != 200:
-                    raise MatrixChatError(
-                        f"Media upload failed HTTP {resp.status}: {text[:500]}"
-                    )
-                data = json.loads(text)
+        file_bytes = await self.hass.async_add_executor_job(path.read_bytes)
+        async with self._session.post(
+            url,
+            headers=headers,
+            data=file_bytes,
+            ssl=self._ssl_arg,
+        ) as resp:
+            text = await resp.text()
+            if resp.status != 200:
+                raise MatrixChatError(
+                    f"Media upload failed HTTP {resp.status}: {text[:500]}"
+                )
+            data = json.loads(text)
 
         content_uri = data.get("content_uri", "")
         if not content_uri:
             raise MatrixChatError("Matrix upload response did not contain content_uri")
         return content_uri
+
+    async def _build_media_info(self, path: Path, mime_type: str) -> dict[str, Any]:
+        info: dict[str, Any] = {
+            "mimetype": mime_type,
+            "size": path.stat().st_size,
+        }
+
+        if mime_type.startswith("image/"):
+            try:
+                width, height = await self.hass.async_add_executor_job(
+                    _image_dimensions, path
+                )
+                info["w"] = width
+                info["h"] = height
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Could not determine image dimensions for %s", path)
+
+        if mime_type.startswith("video/"):
+            ffprobe_bin = shutil.which("ffprobe")
+            if ffprobe_bin:
+                cmd = [
+                    ffprobe_bin,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=width,height:format=duration",
+                    "-of",
+                    "json",
+                    str(path),
+                ]
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _stderr = await proc.communicate()
+                    if proc.returncode == 0 and stdout:
+                        probe = json.loads(stdout.decode(errors="ignore"))
+                        streams = probe.get("streams") or []
+                        for stream in streams:
+                            width = stream.get("width")
+                            height = stream.get("height")
+                            if isinstance(width, int) and width > 0:
+                                info["w"] = width
+                            if isinstance(height, int) and height > 0:
+                                info["h"] = height
+                            if "w" in info and "h" in info:
+                                break
+                        duration = (probe.get("format") or {}).get("duration")
+                        if duration is not None:
+                            try:
+                                info["duration"] = int(float(duration) * 1000)
+                            except (TypeError, ValueError):
+                                pass
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("Could not determine video metadata for %s", path)
+
+        return info
 
     async def async_send_media(
         self,
@@ -580,34 +816,73 @@ class MatrixChatClient:
         )
 
         await self._ensure_upload_size_allowed(prepared_path, max_size_mb)
-        content_uri = await self._upload_media(prepared_path, prepared_mime)
+        info = await self._build_media_info(prepared_path, prepared_mime)
+        msgtype = _media_msgtype(prepared_mime)
+        media_body = prepared_path.name
 
-        msgtype = "m.file"
-        if prepared_mime.startswith("image/"):
-            msgtype = "m.image"
-        elif prepared_mime.startswith("video/"):
-            msgtype = "m.video"
+        resolved_targets: list[dict[str, Any]] = []
+        for target in targets:
+            room_id, target_type = await self._resolve_target_to_room(target)
+            encrypted = await self._is_room_encrypted(room_id)
+            resolved_targets.append(
+                {
+                    "target": target,
+                    "target_type": target_type,
+                    "room_id": room_id,
+                    "encrypted": encrypted,
+                }
+            )
 
-        body = message or prepared_path.name
-        info = {
-            "mimetype": prepared_mime,
-            "size": prepared_path.stat().st_size,
-        }
+        direct_targets = [t for t in resolved_targets if not t["encrypted"]]
+        encrypted_targets = [t for t in resolved_targets if t["encrypted"]]
+
+        content_uri = ""
+        if direct_targets:
+            content_uri = await self._upload_media(prepared_path, prepared_mime)
 
         results: list[dict[str, Any]] = []
-        for target in targets:
-            try:
-                room_id, target_type = await self._resolve_target_to_room(target)
-                encrypted = await self._is_room_encrypted(room_id)
 
+        for item in resolved_targets:
+            target = item["target"]
+            room_id = item["room_id"]
+            target_type = item["target_type"]
+            encrypted = item["encrypted"]
+            try:
                 if encrypted:
-                    raise MatrixChatError(
-                        f"Room {room_id} is encrypted. Media via encrypted webhook is not supported in v1."
+                    event_id = await self._send_encrypted_gateway_media(
+                        room_id=room_id,
+                        file_path=prepared_path,
+                        mime_type=prepared_mime,
+                        msgtype=msgtype,
+                        body=media_body,
+                        caption=message,
+                        info=info,
+                    )
+                    results.append(
+                        {
+                            "target": target,
+                            "target_type": target_type,
+                            "room_id": room_id,
+                            "event_id": event_id,
+                            "transport": "encrypted_gateway",
+                            "encrypted": True,
+                            "status": "sent",
+                            "msgtype": msgtype,
+                        }
+                    )
+                    continue
+
+                if message:
+                    await self._send_room_event(
+                        room_id,
+                        "m.room.message",
+                        {"msgtype": "m.text", "body": message},
                     )
 
                 content = {
                     "msgtype": msgtype,
-                    "body": body,
+                    "body": media_body,
+                    "filename": media_body,
                     "url": content_uri,
                     "info": info,
                 }
@@ -619,6 +894,7 @@ class MatrixChatClient:
                         "room_id": room_id,
                         "event_id": event_id,
                         "transport": "direct",
+                        "encrypted": False,
                         "status": "sent",
                         "msgtype": msgtype,
                     }
@@ -640,9 +916,11 @@ class MatrixChatClient:
                 _LOGGER.warning("Could not cleanup temporary file %s", prepared_path)
 
         success_count = sum(1 for item in results if item.get("status") == "sent")
-        return {
-            "content_uri": content_uri,
+        response: dict[str, Any] = {
             "results": results,
             "success_count": success_count,
             "failure_count": len(results) - success_count,
         }
+        if content_uri:
+            response["content_uri"] = content_uri
+        return response

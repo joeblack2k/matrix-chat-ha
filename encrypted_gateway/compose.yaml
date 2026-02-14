@@ -1,0 +1,25 @@
+services:
+  matrix-e2ee-gateway:
+    container_name: matrix-e2ee-gateway
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    ports:
+      - "18081:8080"
+    networks:
+      - default
+      - homelab
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+networks:
+  homelab:
+    external: true

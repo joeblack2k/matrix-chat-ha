@@ -15,6 +15,7 @@ from .client import MatrixChatAuthError, MatrixChatConnectionError, async_valida
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_AUTO_CONVERT_VIDEO,
+    CONF_DM_ENCRYPTED,
     CONF_ENCRYPTED_WEBHOOK_TOKEN,
     CONF_ENCRYPTED_WEBHOOK_URL,
     CONF_HOMESERVER,
@@ -23,6 +24,7 @@ from .const import (
     CONF_VERIFY_SSL,
     CONF_VIDEO_CONVERT_THRESHOLD_MB,
     DEFAULT_AUTO_CONVERT_VIDEO,
+    DEFAULT_DM_ENCRYPTED,
     DEFAULT_MAX_UPLOAD_MB,
     DEFAULT_VERIFY_SSL,
     DEFAULT_VIDEO_CONVERT_THRESHOLD_MB,
@@ -91,6 +93,7 @@ class MatrixChatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
                 vol.Optional(CONF_ENCRYPTED_WEBHOOK_URL, default=""): cv.string,
                 vol.Optional(CONF_ENCRYPTED_WEBHOOK_TOKEN, default=""): cv.string,
+                vol.Optional(CONF_DM_ENCRYPTED, default=DEFAULT_DM_ENCRYPTED): cv.boolean,
                 vol.Optional(CONF_AUTO_CONVERT_VIDEO, default=DEFAULT_AUTO_CONVERT_VIDEO): cv.boolean,
                 vol.Optional(
                     CONF_VIDEO_CONVERT_THRESHOLD_MB,
@@ -110,6 +113,7 @@ class MatrixChatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         import_data.setdefault(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
         import_data.setdefault(CONF_ENCRYPTED_WEBHOOK_URL, "")
         import_data.setdefault(CONF_ENCRYPTED_WEBHOOK_TOKEN, "")
+        import_data.setdefault(CONF_DM_ENCRYPTED, DEFAULT_DM_ENCRYPTED)
         import_data.setdefault(CONF_AUTO_CONVERT_VIDEO, DEFAULT_AUTO_CONVERT_VIDEO)
         import_data.setdefault(CONF_VIDEO_CONVERT_THRESHOLD_MB, DEFAULT_VIDEO_CONVERT_THRESHOLD_MB)
         import_data.setdefault(CONF_MAX_UPLOAD_MB, DEFAULT_MAX_UPLOAD_MB)
@@ -161,6 +165,10 @@ class MatrixChatOptionsFlow(config_entries.OptionsFlow):
                     CONF_ENCRYPTED_WEBHOOK_TOKEN,
                     default=options.get(CONF_ENCRYPTED_WEBHOOK_TOKEN, data.get(CONF_ENCRYPTED_WEBHOOK_TOKEN, "")),
                 ): cv.string,
+                vol.Optional(
+                    CONF_DM_ENCRYPTED,
+                    default=options.get(CONF_DM_ENCRYPTED, data.get(CONF_DM_ENCRYPTED, DEFAULT_DM_ENCRYPTED)),
+                ): cv.boolean,
                 vol.Optional(
                     CONF_AUTO_CONVERT_VIDEO,
                     default=options.get(CONF_AUTO_CONVERT_VIDEO, data.get(CONF_AUTO_CONVERT_VIDEO, DEFAULT_AUTO_CONVERT_VIDEO)),

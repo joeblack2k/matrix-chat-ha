@@ -34,6 +34,7 @@ from .const import (
     ATTR_TARGETS,
     CONF_ACCESS_TOKEN,
     CONF_AUTO_CONVERT_VIDEO,
+    CONF_DM_ENCRYPTED,
     CONF_ENCRYPTED_WEBHOOK_TOKEN,
     CONF_ENCRYPTED_WEBHOOK_URL,
     CONF_HOMESERVER,
@@ -42,6 +43,7 @@ from .const import (
     CONF_VERIFY_SSL,
     CONF_VIDEO_CONVERT_THRESHOLD_MB,
     DEFAULT_AUTO_CONVERT_VIDEO,
+    DEFAULT_DM_ENCRYPTED,
     DEFAULT_MAX_UPLOAD_MB,
     DEFAULT_VERIFY_SSL,
     DEFAULT_VIDEO_CONVERT_THRESHOLD_MB,
@@ -63,6 +65,7 @@ MATRIX_CHAT_CONFIG_SCHEMA = vol.Schema(
         vol.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
         vol.Optional(CONF_ENCRYPTED_WEBHOOK_URL, default=""): cv.string,
         vol.Optional(CONF_ENCRYPTED_WEBHOOK_TOKEN, default=""): cv.string,
+        vol.Optional(CONF_DM_ENCRYPTED, default=DEFAULT_DM_ENCRYPTED): cv.boolean,
         vol.Optional(CONF_AUTO_CONVERT_VIDEO, default=DEFAULT_AUTO_CONVERT_VIDEO): cv.boolean,
         vol.Optional(CONF_VIDEO_CONVERT_THRESHOLD_MB, default=DEFAULT_VIDEO_CONVERT_THRESHOLD_MB): vol.Coerce(float),
         vol.Optional(CONF_MAX_UPLOAD_MB, default=DEFAULT_MAX_UPLOAD_MB): vol.Coerce(float),
@@ -137,6 +140,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         verify_ssl=entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
         encrypted_webhook_url=_get_value(CONF_ENCRYPTED_WEBHOOK_URL, ""),
         encrypted_webhook_token=_get_value(CONF_ENCRYPTED_WEBHOOK_TOKEN, ""),
+        dm_encrypted=_get_value(CONF_DM_ENCRYPTED, DEFAULT_DM_ENCRYPTED),
         auto_convert_video=_get_value(CONF_AUTO_CONVERT_VIDEO, DEFAULT_AUTO_CONVERT_VIDEO),
         video_convert_threshold_mb=_get_value(
             CONF_VIDEO_CONVERT_THRESHOLD_MB, DEFAULT_VIDEO_CONVERT_THRESHOLD_MB

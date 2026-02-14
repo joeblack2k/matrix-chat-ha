@@ -7,7 +7,8 @@
 - Send images, videos and files
 - Automatic video conversion (MP4 H.264/AAC) above configurable threshold
 - Room alias (`#alias:server`) and room ID (`!room:server`) support
-- Optional encrypted-room webhook fallback for text messages
+- Optional encrypted gateway fallback for encrypted rooms (text and media)
+- DM room selection via `m.direct` account data (reuses existing DM before creating one)
 - Service responses include per-target delivery status and event IDs
 
 ## Included visual assets
@@ -41,6 +42,7 @@ matrix_chat:
   max_upload_mb: 200
   encrypted_webhook_url: ""
   encrypted_webhook_token: ""
+  dm_encrypted: true
 ```
 
 ## Services
@@ -55,10 +57,41 @@ matrix_chat:
 - optional `message`, `mime_type`
 - optional conversion/upload controls
 
+## Encrypted Rooms (Element X / lock icon)
+Home Assistant runtime usually lacks `olm`, so encrypted Matrix send in-process is not reliable.
+Use the included encrypted gateway service:
+
+- Source: `encrypted_gateway/`
+- Endpoints used by integration:
+  - `POST /send_text`
+  - `POST /send_media`
+
+Gateway quick start:
+
+```bash
+cd encrypted_gateway
+cp .env.example .env
+# Fill MATRIX_* values (do not commit .env)
+docker compose up -d --build
+curl -fsS http://127.0.0.1:18081/health
+```
+
+Then set in Matrix Chat config/options:
+- `encrypted_webhook_url`: `http://<gateway-host>:18081`
+- `encrypted_webhook_token`: same as `MATRIX_GATEWAY_TOKEN`
+
+## DM behavior
+Matrix does not send user-to-user outside rooms; DMs are still private rooms.
+This integration now:
+- Reuses existing DM room from `m.direct` when available.
+- Creates a new DM only if needed.
+- Creates encrypted DM by default (`dm_encrypted: true`).
+
 ## Security notes
 - Never commit real passwords or access tokens.
 - Prefer Home Assistant secrets for credentials.
 - The repository intentionally excludes environment and secret files.
+- For encrypted-room delivery, configure an encrypted gateway endpoint and token.
 
 ## Tested acceptance flow
 Validated live on 2026-02-14:

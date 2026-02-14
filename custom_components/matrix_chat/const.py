@@ -11,11 +11,13 @@ CONF_ACCESS_TOKEN = "access_token"
 CONF_VERIFY_SSL = "verify_ssl"
 CONF_ENCRYPTED_WEBHOOK_URL = "encrypted_webhook_url"
 CONF_ENCRYPTED_WEBHOOK_TOKEN = "encrypted_webhook_token"
+CONF_DM_ENCRYPTED = "dm_encrypted"
 CONF_AUTO_CONVERT_VIDEO = "auto_convert_video"
 CONF_VIDEO_CONVERT_THRESHOLD_MB = "video_convert_threshold_mb"
 CONF_MAX_UPLOAD_MB = "max_upload_mb"
 
 DEFAULT_VERIFY_SSL = True
+DEFAULT_DM_ENCRYPTED = True
 DEFAULT_AUTO_CONVERT_VIDEO = True
 DEFAULT_VIDEO_CONVERT_THRESHOLD_MB = 20.0
 DEFAULT_MAX_UPLOAD_MB = 200.0
