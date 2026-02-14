@@ -166,14 +166,13 @@ class MatrixChatClient:
 
     def _gateway_base_urls(self) -> list[str]:
         urls: list[str] = []
-        configured = (self.encrypted_webhook_url or "").rstrip("/")
-        if configured:
-            urls.append(configured)
-
-        # Docker-network fallback for Home Assistant Container deployments.
+        # Prefer Docker-network endpoint for HA Container deployments.
         fallback = "http://matrix-e2ee-gateway:8080"
-        if fallback not in urls:
-            urls.append(fallback)
+        urls.append(fallback)
+
+        configured = (self.encrypted_webhook_url or "").rstrip("/")
+        if configured and configured not in urls:
+            urls.append(configured)
         return urls
 
     async def async_initialize(self) -> None:
