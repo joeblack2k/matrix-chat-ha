@@ -327,13 +327,22 @@ class MatrixE2EEGateway:
         if encrypted:
             if not isinstance(maybe_keys, dict):
                 raise GatewayError("Encrypted upload missing decryption keys")
-            content["file"] = maybe_keys
-            # Element X currently expects top-level url to be present as well.
-            encrypted_url = maybe_keys.get("url")
-            if isinstance(encrypted_url, str) and encrypted_url:
-                content["url"] = encrypted_url
-            elif upload_response.content_uri:
-                content["url"] = upload_response.content_uri
+
+            # Force a plain dict with a valid MXC URL in file.url for strict clients
+            # (Element X rejects encrypted media events when file.url is missing).
+            file_content = dict(maybe_keys)
+            encrypted_url = file_content.get("url") or upload_response.content_uri
+            if not encrypted_url:
+                raise GatewayError("Encrypted upload missing content_uri/file.url")
+
+            encrypted_url_str = str(encrypted_url).strip()
+            if not encrypted_url_str:
+                raise GatewayError("Encrypted upload returned empty file.url")
+
+            file_content["url"] = encrypted_url_str
+            content["file"] = file_content
+            # Keep top-level url for broad client compatibility.
+            content["url"] = encrypted_url_str
         else:
             content["url"] = upload_response.content_uri
 
