@@ -16,7 +16,9 @@
           "dm_encrypted": "Create encrypted direct messages",
           "auto_convert_video": "Auto-convert large videos",
           "video_convert_threshold_mb": "Video convert threshold (MB)",
-          "max_upload_mb": "Max upload size (MB)"
+          "max_upload_mb": "Max upload size (MB)",
+          "inbound_enabled": "Enable inbound Matrix events",
+          "inbound_shared_secret": "Inbound shared secret (optional)"
         }
       }
     },

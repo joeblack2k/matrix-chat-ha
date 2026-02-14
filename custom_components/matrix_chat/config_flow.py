@@ -19,12 +19,15 @@ from .const import (
     CONF_ENCRYPTED_WEBHOOK_TOKEN,
     CONF_ENCRYPTED_WEBHOOK_URL,
     CONF_HOMESERVER,
+    CONF_INBOUND_ENABLED,
+    CONF_INBOUND_SHARED_SECRET,
     CONF_MAX_UPLOAD_MB,
     CONF_USER_ID,
     CONF_VERIFY_SSL,
     CONF_VIDEO_CONVERT_THRESHOLD_MB,
     DEFAULT_AUTO_CONVERT_VIDEO,
     DEFAULT_DM_ENCRYPTED,
+    DEFAULT_INBOUND_ENABLED,
     DEFAULT_MAX_UPLOAD_MB,
     DEFAULT_VERIFY_SSL,
     DEFAULT_VIDEO_CONVERT_THRESHOLD_MB,
@@ -100,6 +103,8 @@ class MatrixChatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     default=DEFAULT_VIDEO_CONVERT_THRESHOLD_MB,
                 ): vol.Coerce(float),
                 vol.Optional(CONF_MAX_UPLOAD_MB, default=DEFAULT_MAX_UPLOAD_MB): vol.Coerce(float),
+                vol.Optional(CONF_INBOUND_ENABLED, default=DEFAULT_INBOUND_ENABLED): cv.boolean,
+                vol.Optional(CONF_INBOUND_SHARED_SECRET, default=""): cv.string,
             }
         )
 
@@ -117,6 +122,8 @@ class MatrixChatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         import_data.setdefault(CONF_AUTO_CONVERT_VIDEO, DEFAULT_AUTO_CONVERT_VIDEO)
         import_data.setdefault(CONF_VIDEO_CONVERT_THRESHOLD_MB, DEFAULT_VIDEO_CONVERT_THRESHOLD_MB)
         import_data.setdefault(CONF_MAX_UPLOAD_MB, DEFAULT_MAX_UPLOAD_MB)
+        import_data.setdefault(CONF_INBOUND_ENABLED, DEFAULT_INBOUND_ENABLED)
+        import_data.setdefault(CONF_INBOUND_SHARED_SECRET, "")
 
         if not import_data.get(CONF_PASSWORD) and not import_data.get(CONF_ACCESS_TOKEN):
             return self.async_abort(reason="missing_auth")
@@ -184,6 +191,18 @@ class MatrixChatOptionsFlow(config_entries.OptionsFlow):
                     CONF_MAX_UPLOAD_MB,
                     default=options.get(CONF_MAX_UPLOAD_MB, data.get(CONF_MAX_UPLOAD_MB, DEFAULT_MAX_UPLOAD_MB)),
                 ): vol.Coerce(float),
+                vol.Optional(
+                    CONF_INBOUND_ENABLED,
+                    default=options.get(
+                        CONF_INBOUND_ENABLED, data.get(CONF_INBOUND_ENABLED, DEFAULT_INBOUND_ENABLED)
+                    ),
+                ): cv.boolean,
+                vol.Optional(
+                    CONF_INBOUND_SHARED_SECRET,
+                    default=options.get(
+                        CONF_INBOUND_SHARED_SECRET, data.get(CONF_INBOUND_SHARED_SECRET, "")
+                    ),
+                ): cv.string,
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

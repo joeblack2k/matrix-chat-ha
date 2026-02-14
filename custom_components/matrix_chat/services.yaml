@@ -151,3 +151,14 @@ send_reaction:
       example: "👍"
       selector:
         text:
+
+get_inbound_config:
+  name: Get inbound config
+  description: Return inbound webhook details and event type for this Matrix Chat entry.
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:

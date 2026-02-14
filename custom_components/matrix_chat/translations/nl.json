@@ -16,7 +16,9 @@
           "dm_encrypted": "Encrypted direct messages aanmaken",
           "auto_convert_video": "Grote video's automatisch converteren",
           "video_convert_threshold_mb": "Video conversiedrempel (MB)",
-          "max_upload_mb": "Maximale uploadgrootte (MB)"
+          "max_upload_mb": "Maximale uploadgrootte (MB)",
+          "inbound_enabled": "Inbound Matrix-events inschakelen",
+          "inbound_shared_secret": "Inbound gedeeld geheim (optioneel)"
         }
       }
     },

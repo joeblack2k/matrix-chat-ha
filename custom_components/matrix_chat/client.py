@@ -52,6 +52,29 @@ def _media_msgtype(mime_type: str) -> str:
     return "m.file"
 
 
+def _sniff_mime_type(path: Path) -> str | None:
+    """Best-effort MIME sniffing from file signature.
+
+    We prefer sniffing over filename extension because files in /config/www may be
+    misnamed (e.g. .jpg containing a PNG), which can break Matrix clients.
+    """
+    try:
+        with path.open("rb") as f:
+            head = f.read(32)
+    except OSError:
+        return None
+
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        return "image/gif"
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        return "video/mp4"
+    return None
+
+
 def _image_dimensions(path: Path) -> tuple[int, int]:
     with Image.open(path) as img:
         return img.size
@@ -193,12 +216,77 @@ class MatrixChatClient:
         self.access_token = auth["access_token"]
         self.device_id = auth.get("device_id", "")
 
+        # One-time best-effort migration: if an unencrypted placeholder DM already exists,
+        # prefer upgrading it to E2EE and reusing it to avoid duplicate DMs.
+        await self._async_migrate_placeholder_dms()
+
+    async def _async_migrate_placeholder_dms(self) -> None:
+        if not self.dm_encrypted or not self._dm_rooms:
+            return
+
+        changed = False
+        for target_user, cached_room_id in list(self._dm_rooms.items()):
+            if not isinstance(target_user, str) or not target_user.startswith("@"):
+                continue
+            discovered = await self._find_existing_dm_like_room(target_user)
+            if not discovered or discovered == cached_room_id:
+                continue
+
+            if not await self._is_room_encrypted(discovered):
+                try:
+                    await self._enable_room_encryption(discovered)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Could not enable encryption for existing DM room %s: %s",
+                        discovered,
+                        err,
+                    )
+                    continue
+
+            if not await self._is_room_encrypted(discovered):
+                continue
+
+            try:
+                await self._prefer_direct_room(target_user, discovered)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Could not update m.direct preference for %s: %s", target_user, err)
+
+            self._dm_rooms[target_user] = discovered
+            changed = True
+
+        if changed:
+            await self.async_persist_cache()
+
     async def async_persist_cache(self) -> None:
         await self._store.async_save(
             {
                 "dm_rooms": self._dm_rooms,
                 "encrypted_rooms": self._encrypted_rooms,
             }
+        )
+
+    async def async_get_gateway_health(self) -> dict[str, Any]:
+        """Fetch /health from the encrypted gateway (best-effort)."""
+        errors: list[str] = []
+        for base_url in self._gateway_base_urls():
+            url = f"{base_url}/health"
+            try:
+                async with self._session.get(url, ssl=self._ssl_arg) as resp:
+                    text = await resp.text()
+                    if 200 <= resp.status < 300:
+                        try:
+                            data = json.loads(text) if text else {}
+                        except json.JSONDecodeError:
+                            data = {"raw": text}
+                        if not isinstance(data, dict):
+                            data = {"raw": data}
+                        return data
+                    errors.append(f"{url} -> HTTP {resp.status}: {text[:200]}")
+            except ClientError as err:
+                errors.append(f"{url} -> {err}")
+
+        raise MatrixChatConnectionError(
+            f"Gateway health check failed: {' | '.join(errors) or 'no endpoints'}"
         )
 
     async def _request_json(
@@ -304,6 +392,85 @@ class MatrixChatClient:
                 out[user] = [room for room in rooms if isinstance(room, str)]
         return out
 
+    async def _get_joined_rooms(self) -> list[str]:
+        data = await self._request_json(
+            "GET",
+            "/_matrix/client/v3/joined_rooms",
+            expected=(200,),
+        )
+        rooms = (data or {}).get("joined_rooms")
+        if not isinstance(rooms, list):
+            return []
+        return [r for r in rooms if isinstance(r, str) and r.startswith("!")]
+
+    async def _get_room_name(self, room_id: str) -> str:
+        encoded = urllib.parse.quote(room_id, safe="")
+        data = await self._request_json(
+            "GET",
+            f"/_matrix/client/v3/rooms/{encoded}/state/m.room.name",
+            expected=(200,),
+            allow_404=True,
+        )
+        if not isinstance(data, dict):
+            return ""
+        name = data.get("name")
+        return name if isinstance(name, str) else ""
+
+    async def _get_room_joined_members(self, room_id: str) -> list[str]:
+        encoded = urllib.parse.quote(room_id, safe="")
+        data = await self._request_json(
+            "GET",
+            f"/_matrix/client/v3/rooms/{encoded}/joined_members",
+            expected=(200,),
+        )
+        if not isinstance(data, dict):
+            return []
+        joined = data.get("joined") or {}
+        if not isinstance(joined, dict):
+            return []
+        return [u for u in joined.keys() if isinstance(u, str) and u.startswith("@")]
+
+    async def _enable_room_encryption(self, room_id: str) -> None:
+        """Enable E2EE in an existing room (one-way operation)."""
+        encoded = urllib.parse.quote(room_id, safe="")
+        payload = {"algorithm": "m.megolm.v1.aes-sha2"}
+        # state_key is the empty string; Matrix API expresses that as a trailing slash.
+        await self._request_json(
+            "PUT",
+            f"/_matrix/client/v3/rooms/{encoded}/state/m.room.encryption/",
+            payload=payload,
+            expected=(200,),
+        )
+        # Avoid stale cache (we may have cached the room as unencrypted before).
+        self._encrypted_rooms[room_id] = True
+
+    async def _find_existing_dm_like_room(self, target_user: str) -> str | None:
+        """Best-effort discovery of an existing DM room not present in m.direct.
+
+        We only accept rooms whose name matches the Element-style placeholder:
+        'DM with @user:server'. This prevents accidentally selecting a normal room
+        that happens to have 2 members.
+        """
+        expected_name = f"DM with {target_user}"
+        for room_id in await self._get_joined_rooms():
+            try:
+                name = await self._get_room_name(room_id)
+                if name != expected_name:
+                    continue
+                members = await self._get_room_joined_members(room_id)
+                if set(members) == {self.user_id, target_user}:
+                    return room_id
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+
+    async def _prefer_direct_room(self, target_user: str, preferred_room_id: str) -> None:
+        direct_map = await self._get_direct_rooms_map()
+        existing = direct_map.get(target_user, [])
+        merged = [preferred_room_id] + [r for r in existing if r != preferred_room_id]
+        direct_map[target_user] = merged
+        await self._put_direct_rooms_map(direct_map)
+
     async def _put_direct_rooms_map(self, mapping: dict[str, list[str]]) -> None:
         user_enc = urllib.parse.quote(self.user_id, safe="")
         await self._request_json(
@@ -382,6 +549,24 @@ class MatrixChatClient:
             self._dm_rooms[target_user] = selected
             await self.async_persist_cache()
             return selected
+
+        # No usable entry in m.direct: try best-effort discovery of an existing placeholder DM.
+        discovered = await self._find_existing_dm_like_room(target_user)
+        if discovered:
+            if self.dm_encrypted and not await self._is_room_encrypted(discovered):
+                try:
+                    await self._enable_room_encryption(discovered)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Could not enable encryption for existing DM room %s: %s",
+                        discovered,
+                        err,
+                    )
+            if not self.dm_encrypted or await self._is_room_encrypted(discovered):
+                await self._prefer_direct_room(target_user, discovered)
+                self._dm_rooms[target_user] = discovered
+                await self.async_persist_cache()
+                return discovered
 
         room_id = await self._create_dm_room(target_user, encrypted=self.dm_encrypted)
         merged = [room_id] + [r for r in room_ids if r != room_id]
@@ -963,6 +1148,15 @@ class MatrixChatClient:
             )
 
         detected_mime = mime_type or (mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        sniffed = await self.hass.async_add_executor_job(_sniff_mime_type, path)
+        if sniffed and sniffed != detected_mime:
+            _LOGGER.warning(
+                "Sniffed MIME type %s differs from %s for %s; using sniffed type",
+                sniffed,
+                detected_mime,
+                path,
+            )
+            detected_mime = sniffed
         prepared_path = path
         prepared_mime = detected_mime
         cleanup_prepared = False

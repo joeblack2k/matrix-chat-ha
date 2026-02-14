@@ -8,9 +8,12 @@ import io
 import json
 import logging
 import os
+import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from aiohttp import ClientSession, web
+from aiohttp import ClientError, ClientSession, web
 from nio import AsyncClient, AsyncClientConfig
 from nio.responses import (
     JoinError,
@@ -25,6 +28,8 @@ from nio.responses import (
 )
 
 _LOGGER = logging.getLogger("matrix_e2ee_gateway")
+
+_MAX_QUEUE_LENGTH = 5000
 
 
 def _env(name: str, default: str = "") -> str:
@@ -49,6 +54,135 @@ class GatewayError(Exception):
     """Gateway-level error."""
 
 
+@dataclass
+class InboundQueueItem:
+    item_id: str
+    created_ts: float
+    payload: dict[str, Any]
+    attempts: int = 0
+    next_attempt_ts: float = 0.0
+    last_error: str = ""
+
+
+class InboundDeliveryQueue:
+    """Persistent, best-effort delivery queue to Home Assistant webhook."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._items: list[InboundQueueItem] = []
+        self.delivered_total = 0
+        self.failed_total = 0
+        self.last_success_ts: float | None = None
+        self.last_error: str = ""
+        self._lock = asyncio.Lock()
+
+    def size(self) -> int:
+        return len(self._items)
+
+    async def load(self) -> None:
+        if not self._path.exists():
+            return
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+            if not raw.strip():
+                return
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return
+            items = data.get("items", [])
+            if not isinstance(items, list):
+                return
+
+            loaded: list[InboundQueueItem] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                payload = item.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                item_id = str(item.get("item_id") or "")
+                if not item_id:
+                    continue
+                loaded.append(
+                    InboundQueueItem(
+                        item_id=item_id,
+                        created_ts=float(item.get("created_ts") or 0.0),
+                        payload=payload,
+                        attempts=int(item.get("attempts") or 0),
+                        next_attempt_ts=float(item.get("next_attempt_ts") or 0.0),
+                        last_error=str(item.get("last_error") or ""),
+                    )
+                )
+
+            self._items = loaded[-_MAX_QUEUE_LENGTH:]
+            self.delivered_total = int(data.get("delivered_total") or 0)
+            self.failed_total = int(data.get("failed_total") or 0)
+            last_success = data.get("last_success_ts")
+            self.last_success_ts = float(last_success) if last_success else None
+            self.last_error = str(data.get("last_error") or "")
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Could not load inbound queue: %s", err)
+
+    async def _persist(self) -> None:
+        tmp = self._path.with_suffix(".tmp")
+        data = {
+            "items": [
+                {
+                    "item_id": i.item_id,
+                    "created_ts": i.created_ts,
+                    "payload": i.payload,
+                    "attempts": i.attempts,
+                    "next_attempt_ts": i.next_attempt_ts,
+                    "last_error": i.last_error,
+                }
+                for i in self._items
+            ],
+            "delivered_total": self.delivered_total,
+            "failed_total": self.failed_total,
+            "last_success_ts": self.last_success_ts,
+            "last_error": self.last_error,
+        }
+        tmp.write_text(json.dumps(data, ensure_ascii=True), encoding="utf-8")
+        tmp.replace(self._path)
+
+    async def enqueue(self, payload: dict[str, Any]) -> str:
+        now = time.time()
+        item_id = f"in-{int(now * 1000)}-{os.urandom(4).hex()}"
+        item = InboundQueueItem(item_id=item_id, created_ts=now, payload=payload)
+        async with self._lock:
+            self._items.append(item)
+            self._items = self._items[-_MAX_QUEUE_LENGTH:]
+            await self._persist()
+        return item_id
+
+    def next_due(self, now: float) -> InboundQueueItem | None:
+        for item in self._items:
+            if item.next_attempt_ts <= now:
+                return item
+        return None
+
+    async def mark_success(self, item_id: str) -> None:
+        async with self._lock:
+            self._items = [i for i in self._items if i.item_id != item_id]
+            self.delivered_total += 1
+            self.last_success_ts = time.time()
+            self.last_error = ""
+            await self._persist()
+
+    async def mark_failure(self, item_id: str, err: str) -> None:
+        async with self._lock:
+            for item in self._items:
+                if item.item_id == item_id:
+                    item.attempts += 1
+                    item.last_error = err[:500]
+                    delay = min(300, max(1, 2 ** min(item.attempts, 8)))
+                    item.next_attempt_ts = time.time() + delay
+                    break
+            self.failed_total += 1
+            self.last_error = err[:500]
+            await self._persist()
+
+
 class MatrixE2EEGateway:
     """Matrix E2EE sending gateway."""
 
@@ -67,9 +201,15 @@ class MatrixE2EEGateway:
         self.ignore_unverified_devices = _env_bool(
             "MATRIX_IGNORE_UNVERIFIED_DEVICES", True
         )
+        self.inbound_webhook_url = _env("MATRIX_INBOUND_WEBHOOK_URL")
+        self.inbound_shared_secret = _env("MATRIX_INBOUND_SHARED_SECRET")
+        self.debug_endpoints = _env_bool("MATRIX_DEBUG_ENDPOINTS", False)
+        self.data_dir = Path(_env("MATRIX_DATA_DIR", "/data"))
+        self._queue = InboundDeliveryQueue(self.data_dir / "inbound_queue.json")
 
         self._client: AsyncClient | None = None
         self._sync_task: asyncio.Task | None = None
+        self._deliver_task: asyncio.Task | None = None
         self._send_lock = asyncio.Lock()
 
     async def _whoami_device_id(self) -> str:
@@ -136,6 +276,9 @@ class MatrixE2EEGateway:
 
         if self.access_token and not self.device_id:
             self.device_id = await self._whoami_device_id()
+
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        await self._queue.load()
 
         config = AsyncClientConfig(
             max_limit_exceeded=0,
@@ -204,9 +347,20 @@ class MatrixE2EEGateway:
             )
 
         self._sync_task = asyncio.create_task(self._sync_loop(), name="matrix-e2ee-sync")
+        self._deliver_task = asyncio.create_task(
+            self._deliver_loop(), name="matrix-inbound-deliver"
+        )
         _LOGGER.info("Matrix gateway ready")
 
     async def stop(self) -> None:
+        if self._deliver_task:
+            self._deliver_task.cancel()
+            try:
+                await self._deliver_task
+            except asyncio.CancelledError:
+                pass
+            self._deliver_task = None
+
         if self._sync_task:
             self._sync_task.cancel()
             try:
@@ -231,10 +385,94 @@ class MatrixE2EEGateway:
                         response.message,
                     )
                     await asyncio.sleep(2)
+                    continue
+
+                await self._process_inbound_sync(response)
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001
                 _LOGGER.exception("Matrix sync loop error: %s", err)
+                await asyncio.sleep(2)
+
+    async def _process_inbound_sync(self, response: Any) -> None:
+        """Extract inbound room events and enqueue for HA webhook delivery."""
+        if not self.inbound_webhook_url:
+            return
+
+        rooms = getattr(getattr(response, "rooms", None), "join", None) or {}
+        for room_id, room_data in rooms.items():
+            timeline = getattr(room_data, "timeline", None)
+            events = getattr(timeline, "events", None) or []
+            for ev in events:
+                src = getattr(ev, "source", None) or {}
+                if not isinstance(src, dict):
+                    continue
+
+                sender = str(src.get("sender") or "")
+                if sender and sender == self.user_id:
+                    continue
+
+                event_id = str(src.get("event_id") or getattr(ev, "event_id", "") or "")
+                ev_type = str(src.get("type") or "")
+                content = src.get("content") if isinstance(src.get("content"), dict) else {}
+
+                if ev_type not in {"m.room.message", "m.reaction"}:
+                    continue
+
+                payload: dict[str, Any] = {
+                    "room_id": room_id,
+                    "event_id": event_id,
+                    "sender": sender,
+                    "type": ev_type,
+                    "content": content,
+                    "msgtype": str(content.get("msgtype") or ""),
+                    "body": content.get("body") if isinstance(content, dict) else None,
+                    "origin_server_ts": src.get("origin_server_ts"),
+                }
+                await self._queue.enqueue(payload)
+
+    async def _deliver_loop(self) -> None:
+        """Deliver queued inbound events to Home Assistant webhook with retries."""
+        if not self.inbound_webhook_url:
+            while True:
+                await asyncio.sleep(10)
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.inbound_shared_secret:
+            headers["X-Matrix-Chat-Secret"] = self.inbound_shared_secret
+
+        while True:
+            try:
+                now = time.time()
+                item = self._queue.next_due(now)
+                if item is None:
+                    await asyncio.sleep(1)
+                    continue
+
+                try:
+                    async with ClientSession() as session:
+                        async with session.post(
+                            self.inbound_webhook_url,
+                            headers=headers,
+                            json=item.payload,
+                            ssl=self.verify_ssl,
+                            timeout=10,
+                        ) as resp:
+                            text = await resp.text()
+                            if 200 <= resp.status < 300:
+                                await self._queue.mark_success(item.item_id)
+                            else:
+                                await self._queue.mark_failure(
+                                    item.item_id, f"HTTP {resp.status}: {text[:400]}"
+                                )
+                except (ClientError, asyncio.TimeoutError) as err:
+                    await self._queue.mark_failure(
+                        item.item_id, f"{type(err).__name__}: {err}"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.exception("Inbound delivery loop error: %s", err)
                 await asyncio.sleep(2)
 
     async def _ensure_joined(self, room_id: str) -> None:
@@ -370,7 +608,7 @@ class MatrixE2EEGateway:
         caption: str,
         mime_type: str,
         info: dict[str, Any],
-    ) -> str:
+    ) -> tuple[str, dict[str, Any] | None]:
         assert self._client is not None
 
         await self._ensure_joined(room_id)
@@ -399,6 +637,7 @@ class MatrixE2EEGateway:
             "info": info,
         }
 
+        debug: dict[str, Any] | None = None
         if encrypted:
             if not isinstance(maybe_keys, dict):
                 raise GatewayError("Encrypted upload missing decryption keys")
@@ -415,11 +654,31 @@ class MatrixE2EEGateway:
                 raise GatewayError("Encrypted upload returned empty file.url")
 
             file_content["url"] = encrypted_url_str
+            # Some clients (notably Element X) also expect mimetype/size on the file object.
+            file_content.setdefault("mimetype", mime_type)
+            file_content.setdefault("size", len(file_bytes))
             content["file"] = file_content
             # Keep top-level url for broad client compatibility.
             content["url"] = encrypted_url_str
+
+            if self.debug_endpoints:
+                debug = {
+                    "encrypted": True,
+                    "msgtype": msgtype,
+                    "has_url": bool(content.get("url")),
+                    "has_file": True,
+                    "file_keys": sorted(str(k) for k in file_content.keys()),
+                }
         else:
             content["url"] = upload_response.content_uri
+            if self.debug_endpoints:
+                debug = {
+                    "encrypted": False,
+                    "msgtype": msgtype,
+                    "has_url": bool(content.get("url")),
+                    "has_file": False,
+                    "file_keys": [],
+                }
 
         if caption:
             await self.send_text(room_id=room_id, message=caption, message_format="text")
@@ -439,7 +698,7 @@ class MatrixE2EEGateway:
                 )
             raise GatewayError("Send media failed with unknown response")
 
-        return send_response.event_id
+        return send_response.event_id, debug
 
 
 @web.middleware
@@ -502,8 +761,35 @@ async def create_app() -> web.Application:
                 "user_id": gateway.user_id,
                 "device_id": gateway.device_id,
                 "rooms_known": rooms,
+                "inbound_enabled": bool(gateway.inbound_webhook_url),
+                "inbound_queue_size": gateway._queue.size(),
+                "inbound_delivered_total": gateway._queue.delivered_total,
+                "inbound_failed_total": gateway._queue.failed_total,
+                "inbound_last_success_ts": gateway._queue.last_success_ts,
+                "inbound_last_error": gateway._queue.last_error,
             }
         )
+
+    async def stats(_request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "inbound_enabled": bool(gateway.inbound_webhook_url),
+                "inbound_queue_size": gateway._queue.size(),
+                "inbound_delivered_total": gateway._queue.delivered_total,
+                "inbound_failed_total": gateway._queue.failed_total,
+                "inbound_last_success_ts": gateway._queue.last_success_ts,
+                "inbound_last_error": gateway._queue.last_error,
+            }
+        )
+
+    async def simulate_inbound(request: web.Request) -> web.Response:
+        if not gateway.debug_endpoints:
+            return web.json_response({"error": "disabled"}, status=404)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise GatewayError("payload must be object")
+        item_id = await gateway._queue.enqueue(payload)
+        return web.json_response({"status": "queued", "item_id": item_id})
 
     async def send_text(request: web.Request) -> web.Response:
         payload = await request.json()
@@ -578,7 +864,7 @@ async def create_app() -> web.Application:
         if not file_bytes:
             raise GatewayError("file is empty")
 
-        event_id = await gateway.send_media(
+        event_id, debug = await gateway.send_media(
             room_id=room_id,
             file_bytes=file_bytes,
             msgtype=msgtype,
@@ -587,12 +873,17 @@ async def create_app() -> web.Application:
             mime_type=mime_type,
             info=info,
         )
-        return web.json_response({"event_id": event_id})
+        response: dict[str, Any] = {"event_id": event_id}
+        if debug:
+            response["debug"] = debug
+        return web.json_response(response)
 
     app.router.add_get("/health", health)
+    app.router.add_get("/stats", stats)
     app.router.add_post("/send_text", send_text)
     app.router.add_post("/send_media", send_media)
     app.router.add_post("/send_reaction", send_reaction)
+    app.router.add_post("/simulate_inbound", simulate_inbound)
 
     return app
 
