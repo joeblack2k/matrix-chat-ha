@@ -15,6 +15,10 @@ from .client import MatrixChatAuthError, MatrixChatConnectionError, async_valida
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_AUTO_CONVERT_VIDEO,
+    CONF_COMMANDS_ALLOWED_ROOMS,
+    CONF_COMMANDS_ALLOWED_SENDERS,
+    CONF_COMMANDS_ALLOWED_SERVICES,
+    CONF_COMMANDS_ENABLED,
     CONF_DM_ENCRYPTED,
     CONF_ENCRYPTED_WEBHOOK_TOKEN,
     CONF_ENCRYPTED_WEBHOOK_URL,
@@ -26,6 +30,7 @@ from .const import (
     CONF_VERIFY_SSL,
     CONF_VIDEO_CONVERT_THRESHOLD_MB,
     DEFAULT_AUTO_CONVERT_VIDEO,
+    DEFAULT_COMMANDS_ENABLED,
     DEFAULT_DM_ENCRYPTED,
     DEFAULT_INBOUND_ENABLED,
     DEFAULT_MAX_UPLOAD_MB,
@@ -105,6 +110,10 @@ class MatrixChatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_MAX_UPLOAD_MB, default=DEFAULT_MAX_UPLOAD_MB): vol.Coerce(float),
                 vol.Optional(CONF_INBOUND_ENABLED, default=DEFAULT_INBOUND_ENABLED): cv.boolean,
                 vol.Optional(CONF_INBOUND_SHARED_SECRET, default=""): cv.string,
+                vol.Optional(CONF_COMMANDS_ENABLED, default=DEFAULT_COMMANDS_ENABLED): cv.boolean,
+                vol.Optional(CONF_COMMANDS_ALLOWED_SENDERS, default=""): cv.string,
+                vol.Optional(CONF_COMMANDS_ALLOWED_ROOMS, default=""): cv.string,
+                vol.Optional(CONF_COMMANDS_ALLOWED_SERVICES, default=""): cv.string,
             }
         )
 
@@ -124,6 +133,10 @@ class MatrixChatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         import_data.setdefault(CONF_MAX_UPLOAD_MB, DEFAULT_MAX_UPLOAD_MB)
         import_data.setdefault(CONF_INBOUND_ENABLED, DEFAULT_INBOUND_ENABLED)
         import_data.setdefault(CONF_INBOUND_SHARED_SECRET, "")
+        import_data.setdefault(CONF_COMMANDS_ENABLED, DEFAULT_COMMANDS_ENABLED)
+        import_data.setdefault(CONF_COMMANDS_ALLOWED_SENDERS, "")
+        import_data.setdefault(CONF_COMMANDS_ALLOWED_ROOMS, "")
+        import_data.setdefault(CONF_COMMANDS_ALLOWED_SERVICES, "")
 
         if not import_data.get(CONF_PASSWORD) and not import_data.get(CONF_ACCESS_TOKEN):
             return self.async_abort(reason="missing_auth")
@@ -202,6 +215,22 @@ class MatrixChatOptionsFlow(config_entries.OptionsFlow):
                     default=options.get(
                         CONF_INBOUND_SHARED_SECRET, data.get(CONF_INBOUND_SHARED_SECRET, "")
                     ),
+                ): cv.string,
+                vol.Optional(
+                    CONF_COMMANDS_ENABLED,
+                    default=options.get(CONF_COMMANDS_ENABLED, DEFAULT_COMMANDS_ENABLED),
+                ): cv.boolean,
+                vol.Optional(
+                    CONF_COMMANDS_ALLOWED_SENDERS,
+                    default=options.get(CONF_COMMANDS_ALLOWED_SENDERS, ""),
+                ): cv.string,
+                vol.Optional(
+                    CONF_COMMANDS_ALLOWED_ROOMS,
+                    default=options.get(CONF_COMMANDS_ALLOWED_ROOMS, ""),
+                ): cv.string,
+                vol.Optional(
+                    CONF_COMMANDS_ALLOWED_SERVICES,
+                    default=options.get(CONF_COMMANDS_ALLOWED_SERVICES, ""),
                 ): cv.string,
             }
         )

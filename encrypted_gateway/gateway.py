@@ -8,6 +8,8 @@ import io
 import json
 import logging
 import os
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +32,9 @@ from nio.responses import (
 _LOGGER = logging.getLogger("matrix_e2ee_gateway")
 
 _MAX_QUEUE_LENGTH = 5000
+_DEFAULT_THUMB_MAX_PX = 512
+_DEFAULT_THUMB_QUALITY = 75
+_DEFAULT_THUMB_MAX_SOURCE_MB = 50
 
 
 def _env(name: str, default: str = "") -> str:
@@ -48,6 +53,110 @@ def _normalize_token(token: str) -> str:
     if out.lower().startswith("bearer "):
         out = out[7:].strip()
     return out
+
+
+try:
+    from PIL import Image  # type: ignore
+except Exception:  # noqa: BLE001
+    Image = None  # type: ignore
+
+
+def _parse_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raw = str(value).strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _clamp_int(value: Any, default: int, min_value: int, max_value: int) -> int:
+    try:
+        out = int(str(value).strip())
+    except Exception:  # noqa: BLE001
+        return default
+    return max(min_value, min(max_value, out))
+
+
+def _make_image_thumbnail_jpeg(
+    file_bytes: bytes, *, max_px: int, quality: int
+) -> tuple[bytes, int, int] | None:
+    if Image is None:
+        return None
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as img:  # type: ignore[attr-defined]
+            img = img.convert("RGB")
+            img.thumbnail((max_px, max_px))
+            w, h = img.size
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=quality, optimize=True)
+            return out.getvalue(), int(w), int(h)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _make_video_thumbnail_jpeg(
+    file_bytes: bytes, *, max_px: int, quality: int
+) -> tuple[bytes, int, int] | None:
+    if Image is None:
+        return None
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        return None
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            f.write(file_bytes)
+            tmp_path = f.name
+
+        # Extract a single frame and scale it down. Emit JPEG to stdout.
+        vf = (
+            f"scale='min({max_px},iw)':'min({max_px},ih)':force_original_aspect_ratio=decrease"
+        )
+        cmd = [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            "0.5",
+            "-i",
+            tmp_path,
+            "-frames:v",
+            "1",
+            "-vf",
+            vf,
+            "-q:v",
+            str(max(2, min(31, int(31 - (quality / 100.0) * 29)))),
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await proc.communicate()
+        if proc.returncode != 0 or not stdout:
+            return None
+
+        with Image.open(io.BytesIO(stdout)) as img:  # type: ignore[attr-defined]
+            w, h = img.size
+        return stdout, int(w), int(h)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 class GatewayError(Exception):
@@ -608,6 +717,11 @@ class MatrixE2EEGateway:
         caption: str,
         mime_type: str,
         info: dict[str, Any],
+        *,
+        thumbnails_enabled: bool = True,
+        thumb_max_px: int = _DEFAULT_THUMB_MAX_PX,
+        thumb_quality: int = _DEFAULT_THUMB_QUALITY,
+        thumb_max_source_mb: int = _DEFAULT_THUMB_MAX_SOURCE_MB,
     ) -> tuple[str, dict[str, Any] | None]:
         assert self._client is not None
 
@@ -634,16 +748,17 @@ class MatrixE2EEGateway:
             "msgtype": msgtype,
             "body": body,
             "filename": body,
-            "info": info,
+            "info": dict(info or {}),
         }
 
         debug: dict[str, Any] | None = None
+        thumb_added = False
         if encrypted:
             if not isinstance(maybe_keys, dict):
                 raise GatewayError("Encrypted upload missing decryption keys")
 
             # Force a plain dict with a valid MXC URL in file.url for strict clients
-            # (Element X rejects encrypted media events when file.url is missing).
+            # (Matrix clients may reject encrypted media events when file.url is missing).
             file_content = dict(maybe_keys)
             encrypted_url = file_content.get("url") or upload_response.content_uri
             if not encrypted_url:
@@ -658,8 +773,9 @@ class MatrixE2EEGateway:
             file_content.setdefault("mimetype", mime_type)
             file_content.setdefault("size", len(file_bytes))
             content["file"] = file_content
-            # Keep top-level url for broad client compatibility.
-            content["url"] = encrypted_url_str
+            # Spec-compliant encrypted media: use only `file` (omit top-level `url`).
+            # Some clients will treat the presence of `url` as unencrypted media and
+            # then fail to decrypt/play the attachment.
 
             if self.debug_endpoints:
                 debug = {
@@ -680,6 +796,67 @@ class MatrixE2EEGateway:
                     "file_keys": [],
                 }
 
+        # Optional media thumbnail for richer previews (encrypted rooms: encrypted thumbnail_file).
+        if (
+            thumbnails_enabled
+            and msgtype in {"m.image", "m.video"}
+            and file_bytes
+            and len(file_bytes) <= int(thumb_max_source_mb) * 1024 * 1024
+        ):
+            try:
+                thumb: tuple[bytes, int, int] | None
+                if msgtype == "m.image":
+                    thumb = _make_image_thumbnail_jpeg(
+                        file_bytes, max_px=int(thumb_max_px), quality=int(thumb_quality)
+                    )
+                else:
+                    thumb = await _make_video_thumbnail_jpeg(
+                        file_bytes, max_px=int(thumb_max_px), quality=int(thumb_quality)
+                    )
+
+                if thumb:
+                    thumb_bytes, tw, th = thumb
+                    async with self._send_lock:
+                        thumb_upload, thumb_keys = await self._client.upload(
+                            io.BytesIO(thumb_bytes),
+                            content_type="image/jpeg",
+                            filename="thumbnail.jpg",
+                            filesize=len(thumb_bytes),
+                            encrypt=encrypted,
+                        )
+
+                    if not isinstance(thumb_upload, UploadResponse):
+                        raise GatewayError("Thumbnail upload failed")
+
+                    thumb_mxc = str(thumb_upload.content_uri or "").strip()
+                    if not thumb_mxc:
+                        raise GatewayError("Thumbnail upload missing content_uri")
+
+                    info_obj = content.setdefault("info", {})
+                    if isinstance(info_obj, dict):
+                        info_obj["thumbnail_info"] = {
+                            "mimetype": "image/jpeg",
+                            "size": len(thumb_bytes),
+                            "w": tw,
+                            "h": th,
+                        }
+                        if not encrypted:
+                            # For unencrypted rooms, include thumbnail_url so the server/client can fetch it directly.
+                            info_obj["thumbnail_url"] = thumb_mxc
+
+                        if encrypted:
+                            if not isinstance(thumb_keys, dict):
+                                raise GatewayError("Encrypted thumbnail upload missing keys")
+                            thumb_file = dict(thumb_keys)
+                            thumb_file["url"] = thumb_mxc
+                            thumb_file.setdefault("mimetype", "image/jpeg")
+                            thumb_file.setdefault("size", len(thumb_bytes))
+                            info_obj["thumbnail_file"] = thumb_file
+
+                    thumb_added = True
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Thumbnail generation/upload failed: %s", err)
+
         if caption:
             await self.send_text(room_id=room_id, message=caption, message_format="text")
 
@@ -697,6 +874,18 @@ class MatrixE2EEGateway:
                     f"Send media failed {send_response.status_code}: {send_response.message}"
                 )
             raise GatewayError("Send media failed with unknown response")
+
+        _LOGGER.info(
+            "Media sent: room=%s msgtype=%s encrypted=%s thumbnail=%s",
+            room_id,
+            msgtype,
+            encrypted,
+            thumb_added,
+        )
+        if debug is None:
+            debug = {"thumbnail_added": thumb_added}
+        else:
+            debug["thumbnail_added"] = thumb_added
 
         return send_response.event_id, debug
 
@@ -808,6 +997,12 @@ async def create_app() -> web.Application:
         if reply_to_event_id and edit_event_id:
             raise GatewayError("reply_to_event_id and edit_event_id are mutually exclusive")
 
+        # Low-noise debug aid: when HA inbound commands are enabled, the integration
+        # replies with "Command ...". Log those replies to help troubleshoot allowlists
+        # without dumping all outbound bot traffic.
+        if message.startswith("Command "):
+            _LOGGER.warning("HA inbound command reply: room=%s msg=%s", room_id, message[:300])
+
         event_id = await gateway.send_text(
             room_id=room_id,
             message=message,
@@ -845,6 +1040,14 @@ async def create_app() -> web.Application:
         caption = str(post.get("caption") or "")
         mime_type = str(post.get("mime_type") or "application/octet-stream").strip()
         info_raw = str(post.get("info") or "{}")
+        thumbnails_enabled = _parse_bool(post.get("thumbnails_enabled"), True)
+        thumb_max_px = _clamp_int(
+            post.get("thumb_max_px"), _DEFAULT_THUMB_MAX_PX, 64, 2048
+        )
+        thumb_quality = _clamp_int(post.get("thumb_quality"), _DEFAULT_THUMB_QUALITY, 30, 95)
+        thumb_max_source_mb = _clamp_int(
+            post.get("thumb_max_source_mb"), _DEFAULT_THUMB_MAX_SOURCE_MB, 1, 512
+        )
 
         if not room_id:
             raise GatewayError("room_id is required")
@@ -872,6 +1075,10 @@ async def create_app() -> web.Application:
             caption=caption,
             mime_type=mime_type,
             info=info,
+            thumbnails_enabled=thumbnails_enabled,
+            thumb_max_px=thumb_max_px,
+            thumb_quality=thumb_quality,
+            thumb_max_source_mb=thumb_max_source_mb,
         )
         response: dict[str, Any] = {"event_id": event_id}
         if debug:

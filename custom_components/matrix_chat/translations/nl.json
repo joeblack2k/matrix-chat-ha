@@ -18,7 +18,11 @@
           "video_convert_threshold_mb": "Video conversiedrempel (MB)",
           "max_upload_mb": "Maximale uploadgrootte (MB)",
           "inbound_enabled": "Inbound Matrix-events inschakelen",
-          "inbound_shared_secret": "Inbound gedeeld geheim (optioneel)"
+          "inbound_shared_secret": "Inbound gedeeld geheim (optioneel)",
+          "commands_enabled": "Inbound commands inschakelen (!ha ...)",
+          "commands_allowed_senders": "Toegestane command-afzenders (een per regel)",
+          "commands_allowed_rooms": "Toegestane command-rooms (room IDs, een per regel)",
+          "commands_allowed_services": "Toegestane services (domain.service, wildcards toegestaan)"
         }
       }
     },

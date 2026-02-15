@@ -1,141 +1,55 @@
-# Matrix Chat for Home Assistant
+# Matrix Chat Custom Component for Home Assistant
 
-`matrix_chat` is a custom Home Assistant integration for Matrix messaging with a bot account.
+This repository contains the `matrix_chat` Home Assistant custom component and the optional Matrix E2EE gateway used for encrypted rooms (Element/Element X compatible).
 
-## Features
-- Send text messages to Matrix rooms and users (DM auto-create for `@user:server` targets)
-- Send images, videos and files
-- Reply to messages and edit previously sent messages
-- Send reactions to existing events
-- Automatic video conversion (MP4 H.264/AAC) above configurable threshold
-- Room alias (`#alias:server`) and room ID (`!room:server`) support
-- Optional encrypted gateway fallback for encrypted rooms (text and media)
-- DM room selection via `m.direct` account data (reuses existing DM before creating one)
-- Service responses include per-target delivery status and event IDs
+## Status (2026-02-15)
 
-## Included visual assets
-- `custom_components/matrix_chat/icon.svg`
-- `custom_components/matrix_chat/logo.svg`
+V3.1 through V3.5 are implemented and validated in a live setup.
 
-## Install
-Copy `custom_components/matrix_chat` into your Home Assistant config directory.
+Implemented optional features:
+- Media thumbnails for image/video, including encrypted thumbnail payloads.
+- Inbound Matrix `!ha` commands with strict sender/room/service allowlists.
+- `notify.matrix_chat` platform with text + attachment support.
+- Persistent outbound retry queue with manual flush support.
+- Room/user helper services:
+  - `matrix_chat.resolve_target`
+  - `matrix_chat.list_rooms`
+  - `matrix_chat.join_room`
+  - `matrix_chat.invite_user` (`dry_run` supported)
+  - `matrix_chat.ensure_dm`
+  - `matrix_chat.ensure_room_encrypted`
 
-Example path:
-- `/config/custom_components/matrix_chat/`
+## Core capabilities
 
-## Configure (UI)
-Add integration **Matrix Chat** and provide:
-- Homeserver URL (e.g. `https://chat.example.org`)
-- Bot MXID (e.g. `@mybot:example.org`)
-- Password (recommended) or access token
+- Send text to users (`@user:server`) and rooms (`!room:server`, `#alias:server`)
+- Auto-create/reuse DM rooms
+- Send image/video/file media
+- Reply/edit/reaction support
+- Optional video conversion for compatibility (MP4 H.264/AAC)
+- Encrypted-room transport via gateway for E2EE delivery
 
-## Configure (YAML import)
-Optional YAML import path:
+## Repository layout
 
-```yaml
-matrix_chat:
-  homeserver: "https://chat.example.org"
-  user_id: "@mybot:example.org"
-  password: ""
-  access_token: "YOUR_ACCESS_TOKEN"
-  verify_ssl: true
-  auto_convert_video: true
-  video_convert_threshold_mb: 20
-  max_upload_mb: 200
-  encrypted_webhook_url: ""
-  encrypted_webhook_token: ""
-  dm_encrypted: true
-```
+- `custom_components/matrix_chat/` -> Home Assistant custom integration
+- `encrypted_gateway/` -> Matrix E2EE gateway service
+- `VALIDATION_REPORT_2026-02-15.md` -> sequential V3.1-V3.5 test report
 
-## Services
-### `matrix_chat.send_message`
-- `target` or `targets`
-- `message`
-- `format` (`text` or `html`)
-- optional `reply_to_event_id` (reply)
-- optional `edit_event_id` (edit/replace)
+## Installation
 
-### `matrix_chat.send_media`
-- `target` or `targets`
-- `file_path`
-- optional `message`, `mime_type`
-- optional conversion/upload controls
+1. Copy `custom_components/matrix_chat` into your HA config directory.
+2. Configure integration via UI (recommended) or YAML import.
+3. For encrypted rooms, run the gateway from `encrypted_gateway/` and set:
+   - `encrypted_webhook_url`
+   - `encrypted_webhook_token`
 
-### `matrix_chat.send_reaction`
-- `target` or `targets`
-- `event_id`
-- `reaction_key` (emoji/key)
+## Security
 
-## Encrypted Rooms (Element X / lock icon)
-Home Assistant runtime usually lacks `olm`, so encrypted Matrix send in-process is not reliable.
-Use the included encrypted gateway service:
+- Do not commit `.env`, passwords, access tokens, or secrets.
+- Use Home Assistant secrets (`!secret`) for credentials.
+- Keep gateway token and Matrix credentials private.
 
-- Source: `encrypted_gateway/`
-- Endpoints used by integration:
-  - `POST /send_text`
-  - `POST /send_media`
+## Notes about DM and E2EE
 
-Gateway quick start:
-
-```bash
-cd encrypted_gateway
-cp .env.example .env
-# Fill MATRIX_* values (do not commit .env)
-docker compose up -d --build
-curl -fsS http://127.0.0.1:18081/health
-```
-
-Then set in Matrix Chat config/options:
-- `encrypted_webhook_url`: `http://<gateway-host>:18081`
-- `encrypted_webhook_token`: same as `MATRIX_GATEWAY_TOKEN`
-
-## DM behavior
-Matrix does not send user-to-user outside rooms; DMs are still private rooms.
-This integration now:
-- Reuses existing DM room from `m.direct` when available.
-- Creates a new DM only if needed.
-- Creates encrypted DM by default (`dm_encrypted: true`).
-
-## Security notes
-- Never commit real passwords or access tokens.
-- Prefer Home Assistant secrets for credentials.
-- The repository intentionally excludes environment and secret files.
-- For encrypted-room delivery, configure an encrypted gateway endpoint and token.
-
-## Tested acceptance flow
-Validated live on 2026-02-14:
-- text message sent
-- jpg image sent
-- mp4 video sent
-
-All three were delivered successfully via `matrix_chat` services to a real Matrix user target.
-
-## Roadmap
-### MVP+ (current sprint)
-- Reply support (`m.in_reply_to`) for text messages
-- Edit support (`m.replace`) for text messages
-- Reaction support (`m.reaction`) with emoji/key
-- Keep encrypted gateway as default transport for encrypted rooms
-
-Acceptance:
-- Reply appears as threaded reply in Element/Element X
-- Edited message shows as edited and preserves latest content
-- Reaction is visible on target event
-
-### V1 (next)
-- Inbound Matrix events to Home Assistant events/webhooks (2-way bot)
-- Delivery reliability: persistent retry queue with backoff
-- Diagnostics entities/sensors (success/fail counters, latency, gateway health)
-
-Acceptance:
-- Incoming DM/room message can trigger HA automation
-- Temporary network errors are retried without message loss
-
-### V2
-- Advanced media UX: thumbnails/posters/voice-note handling
-- Message lifecycle controls (redact/delete by event_id)
-- Optional room/contact aliases and templated routing profiles
-
-Acceptance:
-- Media preview quality improves on mobile clients
-- Admin can remove sent events with service call
+- Matrix DMs are still rooms; there is no protocol-level direct socket chat.
+- When E2EE is active, media events must use encrypted `file` objects (no top-level `url`).
+- This project enforces that for encrypted media, which improves Element X compatibility.

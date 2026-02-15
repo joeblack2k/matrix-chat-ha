@@ -22,6 +22,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             MatrixChatGatewayIntSensor(
                 coordinator,
                 entry_id=entry.entry_id,
+                key="outbox_size",
+                name="Matrix Chat Outbox Size",
+                icon="mdi:tray-arrow-up",
+            ),
+            MatrixChatGatewayIntSensor(
+                coordinator,
+                entry_id=entry.entry_id,
                 key="inbound_queue_size",
                 name="Matrix Chat Gateway Inbound Queue Size",
                 icon="mdi:tray-arrow-down",

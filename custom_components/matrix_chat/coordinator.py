@@ -29,7 +29,14 @@ class MatrixChatGatewayCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            return await self._client.async_get_gateway_health()
+            data = await self._client.async_get_gateway_health()
+            # Best-effort: flush any queued outbound items when the gateway is reachable.
+            try:
+                flush_stats = await self._client.async_flush_outbox(max_items=10)
+                if isinstance(flush_stats, dict):
+                    data.update(flush_stats)
+            except Exception as err:  # noqa: BLE001
+                data["outbox_last_error"] = str(err)[:500]
+            return data
         except Exception as err:  # noqa: BLE001
             raise UpdateFailed(str(err)) from err
-

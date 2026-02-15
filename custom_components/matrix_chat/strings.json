@@ -18,7 +18,11 @@
           "video_convert_threshold_mb": "Video convert threshold (MB)",
           "max_upload_mb": "Max upload size (MB)",
           "inbound_enabled": "Enable inbound Matrix events",
-          "inbound_shared_secret": "Inbound shared secret (optional)"
+          "inbound_shared_secret": "Inbound shared secret (optional)",
+          "commands_enabled": "Enable inbound commands (!ha ...)",
+          "commands_allowed_senders": "Allowed command senders (one per line)",
+          "commands_allowed_rooms": "Allowed command rooms (room IDs, one per line)",
+          "commands_allowed_services": "Allowed services (domain.service, wildcards allowed)"
         }
       }
     },

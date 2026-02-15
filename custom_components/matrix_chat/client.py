@@ -22,6 +22,8 @@ from .const import DOMAIN, FORMAT_HTML
 
 _LOGGER = logging.getLogger(__name__)
 
+_OUTBOX_MAX_ITEMS = 1000
+
 
 class MatrixChatError(Exception):
     """Base error for Matrix Chat."""
@@ -187,6 +189,18 @@ class MatrixChatClient:
         self._dm_rooms: dict[str, str] = {}
         self._encrypted_rooms: dict[str, bool] = {}
 
+        self._outbox_store = Store(hass, 1, f"{DOMAIN}_{entry_id}_outbox")
+        self._outbox: list[dict[str, Any]] = []
+        self._outbox_lock = asyncio.Lock()
+        self._outbox_last_error: str = ""
+
+    @staticmethod
+    def _is_transient_error(err: Exception) -> bool:
+        # Only queue on clear connectivity issues (gateway down / homeserver unreachable).
+        if isinstance(err, MatrixChatConnectionError):
+            return True
+        return False
+
     def _gateway_base_urls(self) -> list[str]:
         urls: list[str] = []
         # Prefer Docker-network endpoint for HA Container deployments.
@@ -203,6 +217,7 @@ class MatrixChatClient:
         cache = await self._store.async_load() or {}
         self._dm_rooms = dict(cache.get("dm_rooms") or {})
         self._encrypted_rooms = dict(cache.get("encrypted_rooms") or {})
+        await self._async_outbox_load()
 
         auth = await async_validate_credentials(
             session=self._session,
@@ -219,6 +234,164 @@ class MatrixChatClient:
         # One-time best-effort migration: if an unencrypted placeholder DM already exists,
         # prefer upgrading it to E2EE and reusing it to avoid duplicate DMs.
         await self._async_migrate_placeholder_dms()
+
+    async def _async_outbox_load(self) -> None:
+        data = await self._outbox_store.async_load() or {}
+        items = data.get("items") if isinstance(data, dict) else None
+        if isinstance(items, list):
+            # Best-effort validation; ignore malformed entries.
+            loaded: list[dict[str, Any]] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if not isinstance(item.get("id"), str) or not item["id"]:
+                    continue
+                if item.get("kind") not in {"message", "media", "reaction"}:
+                    continue
+                if not isinstance(item.get("payload"), dict):
+                    continue
+                loaded.append(item)
+            self._outbox = loaded[-_OUTBOX_MAX_ITEMS:]
+        else:
+            self._outbox = []
+        self._outbox_last_error = str((data or {}).get("last_error") or "")
+
+    async def _async_outbox_save(self) -> None:
+        await self._outbox_store.async_save(
+            {
+                "items": self._outbox[-_OUTBOX_MAX_ITEMS:],
+                "last_error": self._outbox_last_error,
+            }
+        )
+
+    async def async_get_outbox_stats(self) -> dict[str, Any]:
+        async with self._outbox_lock:
+            size = len(self._outbox)
+            oldest = None
+            if self._outbox:
+                try:
+                    oldest = float(self._outbox[0].get("created_ts") or 0.0)
+                except (TypeError, ValueError):
+                    oldest = None
+            # If there's nothing queued, don't keep surfacing a stale error in UI.
+            last_error = self._outbox_last_error if size else ""
+            return {
+                "outbox_size": size,
+                "outbox_oldest_ts": oldest,
+                "outbox_last_error": last_error or "",
+            }
+
+    async def _async_outbox_enqueue(self, *, kind: str, payload: dict[str, Any], error: str) -> str:
+        item_id = uuid.uuid4().hex
+        now = time.time()
+        item = {
+            "id": item_id,
+            "kind": kind,
+            "payload": payload,
+            "created_ts": now,
+            "attempts": 0,
+            "next_attempt_ts": now,
+            "last_error": str(error)[:500],
+        }
+        async with self._outbox_lock:
+            self._outbox.append(item)
+            # Bound size to avoid unbounded growth.
+            if len(self._outbox) > _OUTBOX_MAX_ITEMS:
+                self._outbox = self._outbox[-_OUTBOX_MAX_ITEMS:]
+            self._outbox_last_error = str(error)[:500]
+            await self._async_outbox_save()
+        return item_id
+
+    async def async_flush_outbox(self, *, max_items: int = 25) -> dict[str, Any]:
+        """Try sending queued outbound items. Returns stats about this flush attempt."""
+        sent = 0
+        failed = 0
+        now = time.time()
+
+        for _ in range(max(0, int(max_items))):
+            async with self._outbox_lock:
+                # Find first due item (stable order).
+                idx = None
+                for i, item in enumerate(self._outbox):
+                    try:
+                        due = float(item.get("next_attempt_ts") or 0.0)
+                    except (TypeError, ValueError):
+                        due = 0.0
+                    if due <= now:
+                        idx = i
+                        break
+                if idx is None:
+                    break
+                item = self._outbox.pop(idx)
+                await self._async_outbox_save()
+
+            kind = str(item.get("kind") or "")
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            try:
+                send_result: dict[str, Any] | None = None
+                if kind == "message":
+                    send_result = await self.async_send_message(  # type: ignore[arg-type]
+                        queue_on_fail=False, **payload
+                    )
+                elif kind == "media":
+                    send_result = await self.async_send_media(  # type: ignore[arg-type]
+                        queue_on_fail=False, **payload
+                    )
+                elif kind == "reaction":
+                    send_result = await self.async_send_reaction(  # type: ignore[arg-type]
+                        queue_on_fail=False, **payload
+                    )
+                else:
+                    raise MatrixChatError(f"Unknown outbox kind: {kind}")
+
+                success_count = int((send_result or {}).get("success_count") or 0)
+                failure_count = int((send_result or {}).get("failure_count") or 0)
+                if success_count <= 0 or failure_count > 0:
+                    err_detail = ""
+                    results = (send_result or {}).get("results")
+                    if isinstance(results, list):
+                        for result_item in results:
+                            if not isinstance(result_item, dict):
+                                continue
+                            if result_item.get("status") == "sent":
+                                continue
+                            err_detail = str(
+                                result_item.get("error")
+                                or result_item.get("status")
+                                or "send_failed"
+                            )[:500]
+                            if err_detail:
+                                break
+                    detail_suffix = f": {err_detail}" if err_detail else ""
+                    raise MatrixChatError(
+                        "Outbox replay failed for "
+                        f"{kind} (success_count={success_count}, failure_count={failure_count})"
+                        f"{detail_suffix}"
+                    )
+                sent += 1
+                continue
+            except Exception as err:  # noqa: BLE001
+                failed += 1
+                attempts = int(item.get("attempts") or 0) + 1
+                backoff = min(3600.0, (2 ** min(attempts, 10)) * 5.0)  # 5s .. ~1h
+                item["attempts"] = attempts
+                item["next_attempt_ts"] = time.time() + backoff
+                item["last_error"] = str(err)[:500]
+                async with self._outbox_lock:
+                    self._outbox.append(item)
+                    self._outbox_last_error = str(err)[:500]
+                    await self._async_outbox_save()
+
+        stats = await self.async_get_outbox_stats()
+        # If the queue is empty after this flush, clear last_error so it doesn't linger.
+        if stats.get("outbox_size") in (0, None):
+            async with self._outbox_lock:
+                if self._outbox_last_error:
+                    self._outbox_last_error = ""
+                    await self._async_outbox_save()
+            stats["outbox_last_error"] = ""
+        stats.update({"flush_sent": sent, "flush_failed": failed})
+        return stats
 
     async def _async_migrate_placeholder_dms(self) -> None:
         if not self.dm_encrypted or not self._dm_rooms:
@@ -550,6 +723,26 @@ class MatrixChatClient:
             await self.async_persist_cache()
             return selected
 
+        # If we have direct rooms for this user but none are encrypted, prefer upgrading
+        # an existing DM to E2EE instead of creating a brand new room (avoids duplicates).
+        if self.dm_encrypted and room_ids:
+            for candidate in room_ids:
+                try:
+                    if not await self._is_room_encrypted(candidate):
+                        await self._enable_room_encryption(candidate)
+                    if await self._is_room_encrypted(candidate):
+                        await self._prefer_direct_room(target_user, candidate)
+                        self._dm_rooms[target_user] = candidate
+                        await self.async_persist_cache()
+                        return candidate
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "Could not upgrade direct room %s to encrypted DM for %s: %s",
+                        candidate,
+                        target_user,
+                        err,
+                    )
+
         # No usable entry in m.direct: try best-effort discovery of an existing placeholder DM.
         discovered = await self._find_existing_dm_like_room(target_user)
         if discovered:
@@ -582,9 +775,11 @@ class MatrixChatClient:
             return self._encrypted_rooms[room_id]
 
         encoded = urllib.parse.quote(room_id, safe="")
+        # Matrix state events always have a state_key. For m.room.encryption the state_key
+        # is the empty string, which is represented by a trailing slash in the client API.
         data = await self._request_json(
             "GET",
-            f"/_matrix/client/v3/rooms/{encoded}/state/m.room.encryption",
+            f"/_matrix/client/v3/rooms/{encoded}/state/m.room.encryption/",
             expected=(200,),
             allow_404=True,
         )
@@ -610,6 +805,102 @@ class MatrixChatClient:
         raise MatrixChatError(
             f"Target '{target}' is invalid. Use @user:server, !room:server or #alias:server"
         )
+
+    async def async_resolve_target(self, target: str) -> dict[str, Any]:
+        """Resolve a target (@user, !room_id, #alias) to a concrete room_id."""
+        room_id, target_type = await self._resolve_target_to_room(target)
+        encrypted = await self._is_room_encrypted(room_id)
+        return {
+            "target": target,
+            "target_type": target_type,
+            "room_id": room_id,
+            "encrypted": encrypted,
+        }
+
+    async def async_ensure_dm(self, user_id: str) -> str:
+        """Ensure a DM room exists for a user and return the room_id."""
+        user_id = str(user_id or "").strip()
+        if not user_id.startswith("@"):
+            raise MatrixChatError("user_id must be a Matrix user ID like @user:server")
+        return await self._resolve_dm_room(user_id)
+
+    async def async_ensure_room_encrypted(self, room_id: str) -> bool:
+        """Ensure room has E2EE enabled (one-way). Returns whether it is encrypted."""
+        room_id = str(room_id or "").strip()
+        if not room_id.startswith("!"):
+            raise MatrixChatError("room_id must be a Matrix room ID like !abc:server")
+        if await self._is_room_encrypted(room_id):
+            return True
+        await self._enable_room_encryption(room_id)
+        return await self._is_room_encrypted(room_id)
+
+    async def async_join_room(self, room_or_alias: str) -> str:
+        """Join a room by room_id or alias. Returns the joined room_id."""
+        room_or_alias = str(room_or_alias or "").strip()
+        if not room_or_alias or not (room_or_alias.startswith("!") or room_or_alias.startswith("#")):
+            raise MatrixChatError("room_or_alias must start with ! (room_id) or # (alias)")
+
+        encoded = urllib.parse.quote(room_or_alias, safe="")
+        data = await self._request_json(
+            "POST",
+            f"/_matrix/client/v3/join/{encoded}",
+            payload={},
+            expected=(200,),
+        )
+        room_id = (data or {}).get("room_id", "")
+        if isinstance(room_id, str) and room_id.startswith("!"):
+            return room_id
+        # Some servers may omit room_id in response for already-joined rooms; best-effort fallback.
+        if room_or_alias.startswith("!"):
+            return room_or_alias
+        raise MatrixChatError(f"Join did not return room_id for {room_or_alias}")
+
+    async def async_invite_user(self, room_id: str, user_id: str) -> None:
+        """Invite a user to a room."""
+        room_id = str(room_id or "").strip()
+        user_id = str(user_id or "").strip()
+        if not room_id.startswith("!"):
+            raise MatrixChatError("room_id must be a Matrix room ID like !abc:server")
+        if not user_id.startswith("@"):
+            raise MatrixChatError("user_id must be a Matrix user ID like @user:server")
+
+        encoded = urllib.parse.quote(room_id, safe="")
+        await self._request_json(
+            "POST",
+            f"/_matrix/client/v3/rooms/{encoded}/invite",
+            payload={"user_id": user_id},
+            expected=(200,),
+        )
+
+    async def async_list_joined_rooms(
+        self, *, limit: int = 50, include_members: bool = False
+    ) -> list[dict[str, Any]]:
+        """List rooms the bot is currently joined to (best-effort)."""
+        try:
+            limit_i = max(1, min(500, int(limit)))
+        except (TypeError, ValueError):
+            limit_i = 50
+
+        rooms = await self._get_joined_rooms()
+        out: list[dict[str, Any]] = []
+        for room_id in rooms[:limit_i]:
+            try:
+                name = await self._get_room_name(room_id)
+            except Exception:  # noqa: BLE001
+                name = ""
+            try:
+                encrypted = await self._is_room_encrypted(room_id)
+            except Exception:  # noqa: BLE001
+                encrypted = False
+
+            item: dict[str, Any] = {"room_id": room_id, "name": name, "encrypted": encrypted}
+            if include_members:
+                try:
+                    item["members"] = await self._get_room_joined_members(room_id)
+                except Exception:  # noqa: BLE001
+                    item["members"] = []
+            out.append(item)
+        return out
 
     async def _send_room_event(
         self, room_id: str, message_type: str, content: dict[str, Any]
@@ -654,6 +945,7 @@ class MatrixChatClient:
         }
 
         errors: list[str] = []
+        transient = False
         for base_url in self._gateway_base_urls():
             url = f"{base_url}/send_text"
             try:
@@ -670,11 +962,17 @@ class MatrixChatClient:
                         except json.JSONDecodeError:
                             data = {}
                         return data.get("event_id", "")
+                    if resp.status >= 500:
+                        transient = True
                     errors.append(f"{url} -> HTTP {resp.status}: {text[:250]}")
             except ClientError as err:
+                transient = True
                 errors.append(f"{url} -> {err}")
 
-        raise MatrixChatError(f"Encrypted gateway text failed: {' | '.join(errors)}")
+        msg = f"Encrypted gateway text failed: {' | '.join(errors)}"
+        if transient:
+            raise MatrixChatConnectionError(msg)
+        raise MatrixChatError(msg)
 
     async def _send_encrypted_gateway_reaction(
         self, room_id: str, event_id: str, reaction_key: str
@@ -695,6 +993,7 @@ class MatrixChatClient:
         }
 
         errors: list[str] = []
+        transient = False
         for base_url in self._gateway_base_urls():
             url = f"{base_url}/send_reaction"
             try:
@@ -711,11 +1010,17 @@ class MatrixChatClient:
                         except json.JSONDecodeError:
                             data = {}
                         return data.get("event_id", "")
+                    if resp.status >= 500:
+                        transient = True
                     errors.append(f"{url} -> HTTP {resp.status}: {text[:250]}")
             except ClientError as err:
+                transient = True
                 errors.append(f"{url} -> {err}")
 
-        raise MatrixChatError(f"Encrypted gateway reaction failed: {' | '.join(errors)}")
+        msg = f"Encrypted gateway reaction failed: {' | '.join(errors)}"
+        if transient:
+            raise MatrixChatConnectionError(msg)
+        raise MatrixChatError(msg)
 
     async def _send_encrypted_gateway_media(
         self,
@@ -738,6 +1043,7 @@ class MatrixChatClient:
 
         file_bytes = await self.hass.async_add_executor_job(file_path.read_bytes)
         errors: list[str] = []
+        transient = False
         for base_url in self._gateway_base_urls():
             form = FormData()
             form.add_field("room_id", room_id)
@@ -772,11 +1078,17 @@ class MatrixChatClient:
                                 "Encrypted gateway media response missing event_id"
                             )
                         return event_id
+                    if resp.status >= 500:
+                        transient = True
                     errors.append(f"{url} -> HTTP {resp.status}: {text[:250]}")
             except ClientError as err:
+                transient = True
                 errors.append(f"{url} -> {err}")
 
-        raise MatrixChatError(f"Encrypted gateway media failed: {' | '.join(errors)}")
+        msg = f"Encrypted gateway media failed: {' | '.join(errors)}"
+        if transient:
+            raise MatrixChatConnectionError(msg)
+        raise MatrixChatError(msg)
 
     def _build_message_content(
         self,
@@ -823,6 +1135,8 @@ class MatrixChatClient:
         message_format: str,
         reply_to_event_id: str = "",
         edit_event_id: str = "",
+        *,
+        queue_on_fail: bool = True,
     ) -> dict[str, Any]:
         results: list[dict[str, Any]] = []
         content = self._build_message_content(
@@ -871,14 +1185,35 @@ class MatrixChatClient:
                     }
                 )
             except Exception as err:  # noqa: BLE001
-                _LOGGER.exception("Failed sending message to target %s", target)
-                results.append(
-                    {
-                        "target": target,
-                        "status": "failed",
-                        "error": str(err),
-                    }
-                )
+                if queue_on_fail and self._is_transient_error(err):
+                    item_id = await self._async_outbox_enqueue(
+                        kind="message",
+                        payload={
+                            "targets": [target],
+                            "message": message,
+                            "message_format": message_format,
+                            "reply_to_event_id": reply_to_event_id,
+                            "edit_event_id": edit_event_id,
+                        },
+                        error=str(err),
+                    )
+                    results.append(
+                        {
+                            "target": target,
+                            "status": "queued",
+                            "queue_item_id": item_id,
+                            "error": str(err),
+                        }
+                    )
+                else:
+                    _LOGGER.exception("Failed sending message to target %s", target)
+                    results.append(
+                        {
+                            "target": target,
+                            "status": "failed",
+                            "error": str(err),
+                        }
+                    )
 
         success_count = sum(1 for item in results if item.get("status") == "sent")
         return {
@@ -892,6 +1227,8 @@ class MatrixChatClient:
         targets: list[str],
         event_id: str,
         reaction_key: str,
+        *,
+        queue_on_fail: bool = True,
     ) -> dict[str, Any]:
         content: dict[str, Any] = {
             "m.relates_to": {
@@ -941,14 +1278,33 @@ class MatrixChatClient:
                     }
                 )
             except Exception as err:  # noqa: BLE001
-                _LOGGER.exception("Failed sending reaction to target %s", target)
-                results.append(
-                    {
-                        "target": target,
-                        "status": "failed",
-                        "error": str(err),
-                    }
-                )
+                if queue_on_fail and self._is_transient_error(err):
+                    item_id = await self._async_outbox_enqueue(
+                        kind="reaction",
+                        payload={
+                            "targets": [target],
+                            "event_id": event_id,
+                            "reaction_key": reaction_key,
+                        },
+                        error=str(err),
+                    )
+                    results.append(
+                        {
+                            "target": target,
+                            "status": "queued",
+                            "queue_item_id": item_id,
+                            "error": str(err),
+                        }
+                    )
+                else:
+                    _LOGGER.exception("Failed sending reaction to target %s", target)
+                    results.append(
+                        {
+                            "target": target,
+                            "status": "failed",
+                            "error": str(err),
+                        }
+                    )
 
         success_count = sum(1 for item in results if item.get("status") == "sent")
         return {
@@ -1134,6 +1490,8 @@ class MatrixChatClient:
         auto_convert: bool,
         convert_threshold_mb: float,
         max_size_mb: float,
+        *,
+        queue_on_fail: bool = True,
     ) -> dict[str, Any]:
         path = Path(file_path)
         if not path.is_file():
@@ -1253,14 +1611,37 @@ class MatrixChatClient:
                     }
                 )
             except Exception as err:  # noqa: BLE001
-                _LOGGER.exception("Failed sending media to target %s", target)
-                results.append(
-                    {
-                        "target": target,
-                        "status": "failed",
-                        "error": str(err),
-                    }
-                )
+                if queue_on_fail and self._is_transient_error(err):
+                    item_id = await self._async_outbox_enqueue(
+                        kind="media",
+                        payload={
+                            "targets": [target],
+                            "file_path": file_path,
+                            "message": message,
+                            "mime_type": mime_type,
+                            "auto_convert": auto_convert,
+                            "convert_threshold_mb": convert_threshold_mb,
+                            "max_size_mb": max_size_mb,
+                        },
+                        error=str(err),
+                    )
+                    results.append(
+                        {
+                            "target": target,
+                            "status": "queued",
+                            "queue_item_id": item_id,
+                            "error": str(err),
+                        }
+                    )
+                else:
+                    _LOGGER.exception("Failed sending media to target %s", target)
+                    results.append(
+                        {
+                            "target": target,
+                            "status": "failed",
+                            "error": str(err),
+                        }
+                    )
 
         if cleanup_prepared:
             try:

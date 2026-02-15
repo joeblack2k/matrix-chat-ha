@@ -162,3 +162,163 @@ get_inbound_config:
       example: 01JXYZABCDEF
       selector:
         text:
+
+get_outbox_stats:
+  name: Get outbox stats
+  description: Return queued outbound retry stats (when Matrix or the encrypted gateway was temporarily unreachable).
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+
+flush_outbox:
+  name: Flush outbox
+  description: Try sending queued outbound messages/media now (best-effort).
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    max_items:
+      name: Max items
+      description: Maximum number of queued items to attempt this flush.
+      default: 25
+      selector:
+        number:
+          min: 1
+          max: 500
+          mode: box
+
+resolve_target:
+  name: Resolve target
+  description: Resolve a Matrix target (@user, !room_id, #alias) to a concrete room_id and show whether the room is encrypted.
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    target:
+      name: Target
+      description: Target to resolve.
+      required: true
+      example: "@user:matrix.example.org"
+      selector:
+        text:
+
+list_rooms:
+  name: List joined rooms
+  description: List rooms the bot account is currently joined to (best-effort).
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    limit:
+      name: Limit
+      description: Maximum number of rooms to return.
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 500
+          mode: box
+    include_members:
+      name: Include members
+      description: Include joined member MXIDs for each room (more API calls).
+      default: false
+      selector:
+        boolean:
+
+join_room:
+  name: Join room
+  description: Have the bot join a room by room ID or alias.
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    room_or_alias:
+      name: Room ID or alias
+      description: Room ID (!room:server) or alias (#alias:server) to join.
+      required: true
+      example: "#huisje:chat.patatje.net"
+      selector:
+        text:
+
+invite_user:
+  name: Invite user
+  description: Invite a Matrix user to a room (bot must have permission).
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    room_id:
+      name: Room ID
+      description: Room ID to invite into.
+      required: true
+      example: "!abc123def456:matrix.example.org"
+      selector:
+        text:
+    user_id:
+      name: User ID
+      description: Matrix user ID to invite.
+      required: true
+      example: "@user:matrix.example.org"
+      selector:
+        text:
+    dry_run:
+      name: Dry-run
+      description: Validate inputs but do not send the invite (recommended for testing).
+      default: false
+      selector:
+        boolean:
+
+ensure_dm:
+  name: Ensure DM
+  description: Ensure a direct-message room exists with a user and return its room ID.
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    user_id:
+      name: User ID
+      description: Matrix user ID to DM (will create a DM if needed).
+      required: true
+      example: "@user:matrix.example.org"
+      selector:
+        text:
+
+ensure_room_encrypted:
+  name: Ensure room encrypted
+  description: Enable E2EE in an existing room (one-way operation). Returns whether room is encrypted.
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    room_id:
+      name: Room ID
+      description: Room ID to encrypt.
+      required: true
+      example: "!abc123def456:matrix.example.org"
+      selector:
+        text:
