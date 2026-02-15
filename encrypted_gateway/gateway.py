@@ -17,8 +17,11 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession, web
 from nio import AsyncClient, AsyncClientConfig
+from nio.exceptions import LocalProtocolError
 from nio.responses import (
     JoinError,
+    KeysUploadError,
+    KeysUploadResponse,
     LoginError,
     LoginResponse,
     RoomGetStateEventError,
@@ -373,6 +376,52 @@ class MatrixE2EEGateway:
             raise GatewayError("Token devices did not include a valid device_id")
         return fallback_device_id
 
+    async def _ensure_device_keys_uploaded(self) -> None:
+        assert self._client is not None
+
+        for attempt in range(1, 11):
+            try:
+                response = await self._client.keys_upload()
+            except LocalProtocolError as err:
+                # matrix-nio raises this when no key upload is required.
+                if "No key upload needed" in str(err):
+                    _LOGGER.info("Matrix device keys already up to date")
+                    return
+                raise GatewayError(f"Matrix keys_upload local protocol error: {err}") from err
+
+            if isinstance(response, KeysUploadResponse):
+                _LOGGER.info(
+                    "Matrix device keys uploaded/verified (curve=%s signed_curve=%s)",
+                    response.curve25519_count,
+                    response.signed_curve25519_count,
+                )
+                return
+
+            if isinstance(response, KeysUploadError):
+                status = str(response.status_code)
+                if status in {"429", "M_LIMIT_EXCEEDED"}:
+                    retry_after_ms = getattr(response, "retry_after_ms", 0) or 0
+                    retry_seconds = (
+                        max(1, int(retry_after_ms / 1000))
+                        if retry_after_ms
+                        else min(60, attempt * 3)
+                    )
+                    _LOGGER.warning(
+                        "Matrix keys_upload rate-limited (attempt %s/10), retry in %ss",
+                        attempt,
+                        retry_seconds,
+                    )
+                    await asyncio.sleep(retry_seconds)
+                    continue
+
+                raise GatewayError(
+                    f"Matrix keys_upload failed: {response.status_code} {response.message}"
+                )
+
+            raise GatewayError("Matrix keys_upload failed with unknown response")
+
+        raise GatewayError("Matrix keys_upload failed after retries")
+
     async def start(self) -> None:
         if not self.homeserver:
             raise GatewayError("MATRIX_HOMESERVER is required")
@@ -448,6 +497,8 @@ class MatrixE2EEGateway:
             self.access_token = login_response.access_token
             self.device_id = login_response.device_id
             _LOGGER.info("Logged in Matrix gateway for %s (%s)", self.user_id, self.device_id)
+
+        await self._ensure_device_keys_uploaded()
 
         sync_response = await self._client.sync(timeout=30000, full_state=True)
         if isinstance(sync_response, SyncError):
