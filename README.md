@@ -45,6 +45,7 @@ flowchart LR
 - `docs/HOWTO.md` - end-user setup and examples.
 - `docs/DEVELOPER_GUIDE.md` - implementation and internals.
 - `docs/OPERATIONS_AND_LESSONS.md` - operations runbooks and troubleshooting history.
+- `wiki/` - GitHub wiki page sources (home, quick start, deep dive, troubleshooting).
 - `VALIDATION_REPORT_2026-02-15.md` - staged validation evidence.
 
 ## Installation
