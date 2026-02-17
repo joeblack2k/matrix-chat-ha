@@ -6,13 +6,16 @@ This project is built to replace Telegram-style automations with Matrix-native f
 
 ## Final status
 
-Current release baseline: **v3.5** (with post-v3.5 hardening fixes)
+Current release baseline: **v4.3** (with post-v3.5 hardening fixes)
 
 Implemented and validated:
 
 - Text messaging to Matrix users and rooms.
 - Media messaging (image, video, file) with Element X compatible payloads.
 - Reply, edit, and reaction support.
+- Silent messaging (`m.notice`) to reduce push noise where supported.
+- Event redaction/delete support (`matrix_chat.redact_event`).
+- Thread messaging support for text and media (`thread_root_event_id`).
 - `notify.matrix_chat` service for Telegram-like notify workflows.
 - Encrypted gateway support for E2EE rooms and DMs.
 - Inbound webhook + optional `!ha` command dispatch with strict allowlists.
@@ -98,6 +101,7 @@ Main services:
 - `matrix_chat.send_message`
 - `matrix_chat.send_media`
 - `matrix_chat.send_reaction`
+- `matrix_chat.redact_event`
 - `matrix_chat.get_inbound_config`
 - `matrix_chat.get_outbox_stats`
 - `matrix_chat.flush_outbox`

@@ -246,7 +246,7 @@ class MatrixChatClient:
                     continue
                 if not isinstance(item.get("id"), str) or not item["id"]:
                     continue
-                if item.get("kind") not in {"message", "media", "reaction"}:
+                if item.get("kind") not in {"message", "media", "reaction", "redaction"}:
                     continue
                 if not isinstance(item.get("payload"), dict):
                     continue
@@ -339,6 +339,10 @@ class MatrixChatClient:
                     )
                 elif kind == "reaction":
                     send_result = await self.async_send_reaction(  # type: ignore[arg-type]
+                        queue_on_fail=False, **payload
+                    )
+                elif kind == "redaction":
+                    send_result = await self.async_redact_event(  # type: ignore[arg-type]
                         queue_on_fail=False, **payload
                     )
                 else:
@@ -616,6 +620,7 @@ class MatrixChatClient:
         )
         # Avoid stale cache (we may have cached the room as unencrypted before).
         self._encrypted_rooms[room_id] = True
+        await self.async_persist_cache()
 
     async def _find_existing_dm_like_room(self, target_user: str) -> str | None:
         """Best-effort discovery of an existing DM room not present in m.direct.
@@ -771,8 +776,11 @@ class MatrixChatClient:
         return room_id
 
     async def _is_room_encrypted(self, room_id: str) -> bool:
-        if room_id in self._encrypted_rooms:
-            return self._encrypted_rooms[room_id]
+        cached = self._encrypted_rooms.get(room_id)
+        if cached is True:
+            return True
+        # Cached "False" can go stale (for example after external room changes or
+        # older cache snapshots). Revalidate against live room state before deciding.
 
         encoded = urllib.parse.quote(room_id, safe="")
         # Matrix state events always have a state_key. For m.room.encryption the state_key
@@ -784,8 +792,9 @@ class MatrixChatClient:
             allow_404=True,
         )
         encrypted = data is not None
-        self._encrypted_rooms[room_id] = encrypted
-        await self.async_persist_cache()
+        if cached != encrypted or room_id not in self._encrypted_rooms:
+            self._encrypted_rooms[room_id] = encrypted
+            await self.async_persist_cache()
         return encrypted
 
     async def _resolve_target_to_room(self, target: str) -> tuple[str, str]:
@@ -919,13 +928,35 @@ class MatrixChatClient:
             raise MatrixChatError(f"Matrix did not return event_id for room {room_id}")
         return event_id
 
+    async def _redact_room_event(self, room_id: str, event_id: str, reason: str) -> str:
+        encoded_room = urllib.parse.quote(room_id, safe="")
+        encoded_event = urllib.parse.quote(event_id, safe="")
+        txn_id = self._next_txn_id()
+        payload: dict[str, Any] = {}
+        if reason:
+            payload["reason"] = reason
+        data = await self._request_json(
+            "PUT",
+            f"/_matrix/client/v3/rooms/{encoded_room}/redact/{encoded_event}/{txn_id}",
+            payload=payload,
+            expected=(200,),
+        )
+        redaction_event_id = (data or {}).get("event_id", "")
+        if not redaction_event_id:
+            raise MatrixChatError(
+                f"Matrix did not return redaction event_id for room {room_id}"
+            )
+        return redaction_event_id
+
     async def _send_encrypted_gateway_text(
         self,
         room_id: str,
         message: str,
         message_format: str,
+        silent: bool = False,
         reply_to_event_id: str = "",
         edit_event_id: str = "",
+        thread_root_event_id: str = "",
     ) -> str:
         if not self.encrypted_webhook_url and not self._gateway_base_urls():
             raise MatrixChatError(
@@ -940,8 +971,10 @@ class MatrixChatClient:
             "room_id": room_id,
             "message": message,
             "format": message_format,
+            "silent": bool(silent),
             "reply_to_event_id": reply_to_event_id,
             "edit_event_id": edit_event_id,
+            "thread_root_event_id": thread_root_event_id,
         }
 
         errors: list[str] = []
@@ -1031,6 +1064,7 @@ class MatrixChatClient:
         body: str,
         caption: str,
         info: dict[str, Any],
+        thread_root_event_id: str = "",
     ) -> str:
         if not self.encrypted_webhook_url and not self._gateway_base_urls():
             raise MatrixChatError(
@@ -1052,6 +1086,7 @@ class MatrixChatClient:
             form.add_field("caption", caption or "")
             form.add_field("mime_type", mime_type)
             form.add_field("info", json.dumps(info))
+            form.add_field("thread_root_event_id", str(thread_root_event_id or ""))
             form.add_field(
                 "file",
                 file_bytes,
@@ -1094,16 +1129,35 @@ class MatrixChatClient:
         self,
         message: str,
         message_format: str,
+        silent: bool,
         reply_to_event_id: str,
         edit_event_id: str,
+        thread_root_event_id: str,
     ) -> dict[str, Any]:
+        thread_root_event_id = str(thread_root_event_id or "").strip()
         if reply_to_event_id and edit_event_id:
             raise MatrixChatError("reply_to_event_id and edit_event_id are mutually exclusive")
+        if thread_root_event_id and edit_event_id:
+            raise MatrixChatError("thread_root_event_id and edit_event_id are mutually exclusive")
 
-        base_content: dict[str, Any] = {"msgtype": "m.text", "body": message}
+        msgtype = "m.notice" if silent else "m.text"
+        base_content: dict[str, Any] = {"msgtype": msgtype, "body": message}
+        if silent:
+            # Explicitly clear mentions metadata to reduce push noise where supported.
+            base_content["m.mentions"] = {}
         if message_format == FORMAT_HTML:
             base_content["format"] = "org.matrix.custom.html"
             base_content["formatted_body"] = message
+
+        if thread_root_event_id:
+            thread_reply_event_id = str(reply_to_event_id or thread_root_event_id).strip()
+            base_content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_root_event_id,
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": thread_reply_event_id},
+            }
+            return base_content
 
         if reply_to_event_id:
             base_content["m.relates_to"] = {
@@ -1113,7 +1167,7 @@ class MatrixChatClient:
 
         if edit_event_id:
             edit_content = {
-                "msgtype": "m.text",
+                "msgtype": msgtype,
                 "body": f"* {message}",
                 "m.new_content": dict(base_content),
                 "m.relates_to": {
@@ -1133,8 +1187,10 @@ class MatrixChatClient:
         targets: list[str],
         message: str,
         message_format: str,
+        silent: bool = False,
         reply_to_event_id: str = "",
         edit_event_id: str = "",
+        thread_root_event_id: str = "",
         *,
         queue_on_fail: bool = True,
     ) -> dict[str, Any]:
@@ -1142,8 +1198,10 @@ class MatrixChatClient:
         content = self._build_message_content(
             message=message,
             message_format=message_format,
+            silent=silent,
             reply_to_event_id=reply_to_event_id,
             edit_event_id=edit_event_id,
+            thread_root_event_id=thread_root_event_id,
         )
 
         for target in targets:
@@ -1156,8 +1214,10 @@ class MatrixChatClient:
                         room_id=room_id,
                         message=message,
                         message_format=message_format,
+                        silent=silent,
                         reply_to_event_id=reply_to_event_id,
                         edit_event_id=edit_event_id,
+                        thread_root_event_id=thread_root_event_id,
                     )
                     results.append(
                         {
@@ -1192,8 +1252,10 @@ class MatrixChatClient:
                             "targets": [target],
                             "message": message,
                             "message_format": message_format,
+                            "silent": bool(silent),
                             "reply_to_event_id": reply_to_event_id,
                             "edit_event_id": edit_event_id,
+                            "thread_root_event_id": thread_root_event_id,
                         },
                         error=str(err),
                     )
@@ -1298,6 +1360,77 @@ class MatrixChatClient:
                     )
                 else:
                     _LOGGER.exception("Failed sending reaction to target %s", target)
+                    results.append(
+                        {
+                            "target": target,
+                            "status": "failed",
+                            "error": str(err),
+                        }
+                    )
+
+        success_count = sum(1 for item in results if item.get("status") == "sent")
+        return {
+            "results": results,
+            "success_count": success_count,
+            "failure_count": len(results) - success_count,
+        }
+
+    async def async_redact_event(
+        self,
+        targets: list[str],
+        event_id: str,
+        reason: str = "",
+        *,
+        queue_on_fail: bool = True,
+    ) -> dict[str, Any]:
+        event_id = str(event_id or "").strip()
+        if not event_id:
+            raise MatrixChatError("event_id is required")
+
+        reason = str(reason or "").strip()
+        results: list[dict[str, Any]] = []
+        for target in targets:
+            try:
+                room_id, target_type = await self._resolve_target_to_room(target)
+                encrypted = await self._is_room_encrypted(room_id)
+                redaction_event_id = await self._redact_room_event(
+                    room_id=room_id,
+                    event_id=event_id,
+                    reason=reason,
+                )
+                results.append(
+                    {
+                        "target": target,
+                        "target_type": target_type,
+                        "room_id": room_id,
+                        "event_id": redaction_event_id,
+                        "redacts": event_id,
+                        "transport": "direct",
+                        "encrypted": encrypted,
+                        "status": "sent",
+                    }
+                )
+            except Exception as err:  # noqa: BLE001
+                if queue_on_fail and self._is_transient_error(err):
+                    item_id = await self._async_outbox_enqueue(
+                        kind="redaction",
+                        payload={
+                            "targets": [target],
+                            "event_id": event_id,
+                            "reason": reason,
+                        },
+                        error=str(err),
+                    )
+                    results.append(
+                        {
+                            "target": target,
+                            "status": "queued",
+                            "queue_item_id": item_id,
+                            "error": str(err),
+                        }
+                    )
+                else:
+                    _LOGGER.exception("Failed redacting event %s in target %s", event_id, target)
                     results.append(
                         {
                             "target": target,
@@ -1490,6 +1623,7 @@ class MatrixChatClient:
         auto_convert: bool,
         convert_threshold_mb: float,
         max_size_mb: float,
+        thread_root_event_id: str = "",
         *,
         queue_on_fail: bool = True,
     ) -> dict[str, Any]:
@@ -1568,6 +1702,7 @@ class MatrixChatClient:
                         body=media_body,
                         caption=message,
                         info=info,
+                        thread_root_event_id=thread_root_event_id,
                     )
                     results.append(
                         {
@@ -1587,7 +1722,14 @@ class MatrixChatClient:
                     await self._send_room_event(
                         room_id,
                         "m.room.message",
-                        {"msgtype": "m.text", "body": message},
+                        self._build_message_content(
+                            message=message,
+                            message_format="text",
+                            silent=False,
+                            reply_to_event_id="",
+                            edit_event_id="",
+                            thread_root_event_id=thread_root_event_id,
+                        ),
                     )
 
                 content = {
@@ -1597,6 +1739,13 @@ class MatrixChatClient:
                     "url": content_uri,
                     "info": info,
                 }
+                if thread_root_event_id:
+                    content["m.relates_to"] = {
+                        "rel_type": "m.thread",
+                        "event_id": thread_root_event_id,
+                        "is_falling_back": True,
+                        "m.in_reply_to": {"event_id": thread_root_event_id},
+                    }
                 event_id = await self._send_room_event(room_id, "m.room.message", content)
                 results.append(
                     {
@@ -1622,6 +1771,7 @@ class MatrixChatClient:
                             "auto_convert": auto_convert,
                             "convert_threshold_mb": convert_threshold_mb,
                             "max_size_mb": max_size_mb,
+                            "thread_root_event_id": thread_root_event_id,
                         },
                         error=str(err),
                     )

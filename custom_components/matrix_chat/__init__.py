@@ -36,6 +36,9 @@ from .const import (
     ATTR_EVENT_ID,
     ATTR_FILE_PATH,
     ATTR_FORMAT,
+    ATTR_THREAD_ROOT_EVENT_ID,
+    ATTR_SILENT,
+    ATTR_REASON,
     ATTR_INBOUND_ENABLED,
     ATTR_INBOUND_EVENT_TYPE,
     ATTR_INBOUND_WEBHOOK_ID,
@@ -95,6 +98,7 @@ from .const import (
     SERVICE_SEND_MEDIA,
     SERVICE_SEND_MESSAGE,
     SERVICE_SEND_REACTION,
+    SERVICE_REDACT_EVENT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -116,6 +120,8 @@ _NOTIFY_DATA_MIME_TYPE = "mime_type"
 _NOTIFY_DATA_AUTO_CONVERT = "auto_convert"
 _NOTIFY_DATA_CONVERT_THRESHOLD_MB = "convert_threshold_mb"
 _NOTIFY_DATA_MAX_SIZE_MB = "max_size_mb"
+_NOTIFY_DATA_SILENT = "silent"
+_NOTIFY_DATA_THREAD_ROOT_EVENT_ID = "thread_root_event_id"
 
 MATRIX_CHAT_CONFIG_SCHEMA = vol.Schema(
     {
@@ -168,8 +174,10 @@ SERVICE_SEND_MESSAGE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TARGETS): vol.Any(cv.string, [cv.string]),
         vol.Required(ATTR_MESSAGE): cv.string,
         vol.Optional(ATTR_FORMAT, default=FORMAT_TEXT): vol.In([FORMAT_TEXT, FORMAT_HTML]),
+        vol.Optional(ATTR_SILENT, default=False): cv.boolean,
         vol.Optional(ATTR_REPLY_TO_EVENT_ID): cv.string,
         vol.Optional(ATTR_EDIT_EVENT_ID): cv.string,
+        vol.Optional(ATTR_THREAD_ROOT_EVENT_ID): cv.string,
     }
 )
 
@@ -184,6 +192,7 @@ SERVICE_SEND_MEDIA_SCHEMA = vol.Schema(
         vol.Optional(ATTR_AUTO_CONVERT): cv.boolean,
         vol.Optional(ATTR_CONVERT_THRESHOLD_MB): vol.Coerce(float),
         vol.Optional(ATTR_MAX_SIZE_MB): vol.Coerce(float),
+        vol.Optional(ATTR_THREAD_ROOT_EVENT_ID): cv.string,
     }
 )
 
@@ -194,6 +203,16 @@ SERVICE_SEND_REACTION_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TARGETS): vol.Any(cv.string, [cv.string]),
         vol.Required(ATTR_EVENT_ID): cv.string,
         vol.Required(ATTR_REACTION_KEY): cv.string,
+    }
+)
+
+SERVICE_REDACT_EVENT_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ENTRY_ID): cv.string,
+        vol.Optional(ATTR_TARGET): cv.string,
+        vol.Optional(ATTR_TARGETS): vol.Any(cv.string, [cv.string]),
+        vol.Required(ATTR_EVENT_ID): cv.string,
+        vol.Optional(ATTR_REASON, default=""): cv.string,
     }
 )
 
@@ -364,6 +383,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_SEND_MEDIA)
         if hass.services.has_service(DOMAIN, SERVICE_SEND_REACTION):
             hass.services.async_remove(DOMAIN, SERVICE_SEND_REACTION)
+        if hass.services.has_service(DOMAIN, SERVICE_REDACT_EVENT):
+            hass.services.async_remove(DOMAIN, SERVICE_REDACT_EVENT)
         if hass.services.has_service(DOMAIN, SERVICE_GET_INBOUND_CONFIG):
             hass.services.async_remove(DOMAIN, SERVICE_GET_INBOUND_CONFIG)
         hass.data[DOMAIN]["services_registered"] = False
@@ -434,6 +455,9 @@ async def _async_register_notify(hass: HomeAssistant) -> None:
                     auto_convert=auto_convert,
                     convert_threshold_mb=convert_threshold_mb,
                     max_size_mb=max_size_mb,
+                    thread_root_event_id=str(
+                        data.get(_NOTIFY_DATA_THREAD_ROOT_EVENT_ID, "") or ""
+                    ).strip(),
                 )
             return
 
@@ -441,6 +465,10 @@ async def _async_register_notify(hass: HomeAssistant) -> None:
             targets=targets,
             message=message,
             message_format=FORMAT_TEXT,
+            silent=bool(data.get(_NOTIFY_DATA_SILENT, False)),
+            thread_root_event_id=str(
+                data.get(_NOTIFY_DATA_THREAD_ROOT_EVENT_ID, "") or ""
+            ).strip(),
         )
 
     hass.services.async_register(
@@ -780,14 +808,20 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(
                 "reply_to_event_id and edit_event_id cannot be used together"
             )
+        if call.data.get(ATTR_THREAD_ROOT_EVENT_ID) and call.data.get(ATTR_EDIT_EVENT_ID):
+            raise HomeAssistantError(
+                "thread_root_event_id and edit_event_id cannot be used together"
+            )
 
         client = _select_client(hass, call.data.get(ATTR_ENTRY_ID))
         result = await client.async_send_message(
             targets=targets,
             message=call.data[ATTR_MESSAGE],
             message_format=call.data.get(ATTR_FORMAT, FORMAT_TEXT),
+            silent=bool(call.data.get(ATTR_SILENT, False)),
             reply_to_event_id=call.data.get(ATTR_REPLY_TO_EVENT_ID, ""),
             edit_event_id=call.data.get(ATTR_EDIT_EVENT_ID, ""),
+            thread_root_event_id=call.data.get(ATTR_THREAD_ROOT_EVENT_ID, ""),
         )
         return result
 
@@ -807,6 +841,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 ATTR_CONVERT_THRESHOLD_MB, client.video_convert_threshold_mb
             ),
             max_size_mb=call.data.get(ATTR_MAX_SIZE_MB, client.max_upload_mb),
+            thread_root_event_id=call.data.get(ATTR_THREAD_ROOT_EVENT_ID, ""),
         )
         return result
 
@@ -820,6 +855,19 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             targets=targets,
             event_id=call.data[ATTR_EVENT_ID],
             reaction_key=call.data[ATTR_REACTION_KEY],
+        )
+        return result
+
+    async def _handle_redact_event(call: ServiceCall) -> ServiceResponse:
+        targets = _extract_targets(call.data)
+        if not targets:
+            raise HomeAssistantError("Provide target or targets")
+
+        client = _select_client(hass, call.data.get(ATTR_ENTRY_ID))
+        result = await client.async_redact_event(
+            targets=targets,
+            event_id=call.data[ATTR_EVENT_ID],
+            reason=call.data.get(ATTR_REASON, ""),
         )
         return result
 
@@ -924,6 +972,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_SEND_REACTION,
         _handle_send_reaction,
         schema=SERVICE_SEND_REACTION_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REDACT_EVENT,
+        _handle_redact_event,
+        schema=SERVICE_REDACT_EVENT_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

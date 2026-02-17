@@ -37,6 +37,12 @@ send_message:
           options:
             - text
             - html
+    silent:
+      name: Silent
+      description: Send as silent notice (m.notice) to suppress push notifications where supported.
+      default: false
+      selector:
+        boolean:
     reply_to_event_id:
       name: Reply to event ID
       description: Optional Matrix event ID to send this message as a reply.
@@ -47,6 +53,12 @@ send_message:
       name: Edit event ID
       description: Optional Matrix event ID to edit (m.replace). Mutually exclusive with reply_to_event_id.
       example: "$abc123def456:matrix.example.org"
+      selector:
+        text:
+    thread_root_event_id:
+      name: Thread root event ID
+      description: Optional Matrix event ID of the thread root (m.thread).
+      example: "$threadroot123:matrix.example.org"
       selector:
         text:
 
@@ -113,6 +125,12 @@ send_media:
           min: 1
           max: 4096
           mode: box
+    thread_root_event_id:
+      name: Thread root event ID
+      description: Optional Matrix event ID of the thread root (m.thread).
+      example: "$threadroot123:matrix.example.org"
+      selector:
+        text:
 
 send_reaction:
   name: Send Matrix reaction
@@ -149,6 +167,42 @@ send_reaction:
       description: Emoji or key used as reaction.
       required: true
       example: "👍"
+      selector:
+        text:
+
+redact_event:
+  name: Redact Matrix event
+  description: Remove an existing Matrix event (redaction), for example a sent message or media event.
+  fields:
+    entry_id:
+      name: Integration entry
+      description: Optional config entry ID when multiple Matrix Chat entries exist.
+      example: 01JXYZABCDEF
+      selector:
+        text:
+    target:
+      name: Target
+      description: Single target room or user, for example !roomid:server, #alias:server or @user:server.
+      example: "@user:matrix.example.org"
+      selector:
+        text:
+    targets:
+      name: Targets
+      description: List of targets, each !roomid:server, #alias:server or @user:server.
+      example:
+        - "@user:matrix.example.org"
+      selector:
+        object:
+    event_id:
+      name: Event ID
+      description: Matrix event ID that should be redacted.
+      required: true
+      example: "$abc123def456:matrix.example.org"
+      selector:
+        text:
+    reason:
+      name: Reason
+      description: Optional redaction reason (visible in room history where supported).
       selector:
         text:
 

@@ -663,16 +663,34 @@ class MatrixE2EEGateway:
         self,
         message: str,
         message_format: str,
+        silent: bool,
         reply_to_event_id: str,
         edit_event_id: str,
+        thread_root_event_id: str,
     ) -> dict[str, Any]:
+        thread_root_event_id = str(thread_root_event_id or "").strip()
         if reply_to_event_id and edit_event_id:
             raise GatewayError("reply_to_event_id and edit_event_id are mutually exclusive")
+        if thread_root_event_id and edit_event_id:
+            raise GatewayError("thread_root_event_id and edit_event_id are mutually exclusive")
 
-        content: dict[str, Any] = {"msgtype": "m.text", "body": message}
+        msgtype = "m.notice" if silent else "m.text"
+        content: dict[str, Any] = {"msgtype": msgtype, "body": message}
+        if silent:
+            content["m.mentions"] = {}
         if message_format == "html":
             content["format"] = "org.matrix.custom.html"
             content["formatted_body"] = message
+
+        if thread_root_event_id:
+            thread_reply_event_id = str(reply_to_event_id or thread_root_event_id).strip()
+            content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_root_event_id,
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": thread_reply_event_id},
+            }
+            return content
 
         if reply_to_event_id:
             content["m.relates_to"] = {
@@ -682,7 +700,7 @@ class MatrixE2EEGateway:
 
         if edit_event_id:
             edit_content: dict[str, Any] = {
-                "msgtype": "m.text",
+                "msgtype": msgtype,
                 "body": f"* {message}",
                 "m.new_content": dict(content),
                 "m.relates_to": {
@@ -702,8 +720,10 @@ class MatrixE2EEGateway:
         room_id: str,
         message: str,
         message_format: str,
+        silent: bool = False,
         reply_to_event_id: str = "",
         edit_event_id: str = "",
+        thread_root_event_id: str = "",
     ) -> str:
         assert self._client is not None
 
@@ -711,8 +731,10 @@ class MatrixE2EEGateway:
         content = self._build_message_content(
             message=message,
             message_format=message_format,
+            silent=silent,
             reply_to_event_id=reply_to_event_id,
             edit_event_id=edit_event_id,
+            thread_root_event_id=thread_root_event_id,
         )
 
         async with self._send_lock:
@@ -768,6 +790,7 @@ class MatrixE2EEGateway:
         caption: str,
         mime_type: str,
         info: dict[str, Any],
+        thread_root_event_id: str = "",
         *,
         thumbnails_enabled: bool = True,
         thumb_max_px: int = _DEFAULT_THUMB_MAX_PX,
@@ -908,8 +931,21 @@ class MatrixE2EEGateway:
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("Thumbnail generation/upload failed: %s", err)
 
+        if thread_root_event_id:
+            content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_root_event_id,
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": thread_root_event_id},
+            }
+
         if caption:
-            await self.send_text(room_id=room_id, message=caption, message_format="text")
+            await self.send_text(
+                room_id=room_id,
+                message=caption,
+                message_format="text",
+                thread_root_event_id=thread_root_event_id,
+            )
 
         async with self._send_lock:
             send_response = await self._client.room_send(
@@ -1036,8 +1072,10 @@ async def create_app() -> web.Application:
         room_id = (payload.get("room_id") or "").strip()
         message = str(payload.get("message") or "")
         message_format = str(payload.get("format") or "text").strip().lower()
+        silent = _parse_bool(payload.get("silent"), False)
         reply_to_event_id = str(payload.get("reply_to_event_id") or "").strip()
         edit_event_id = str(payload.get("edit_event_id") or "").strip()
+        thread_root_event_id = str(payload.get("thread_root_event_id") or "").strip()
 
         if not room_id:
             raise GatewayError("room_id is required")
@@ -1047,6 +1085,8 @@ async def create_app() -> web.Application:
             raise GatewayError("format must be 'text' or 'html'")
         if reply_to_event_id and edit_event_id:
             raise GatewayError("reply_to_event_id and edit_event_id are mutually exclusive")
+        if thread_root_event_id and edit_event_id:
+            raise GatewayError("thread_root_event_id and edit_event_id are mutually exclusive")
 
         # Low-noise debug aid: when HA inbound commands are enabled, the integration
         # replies with "Command ...". Log those replies to help troubleshoot allowlists
@@ -1058,8 +1098,10 @@ async def create_app() -> web.Application:
             room_id=room_id,
             message=message,
             message_format=message_format,
+            silent=silent,
             reply_to_event_id=reply_to_event_id,
             edit_event_id=edit_event_id,
+            thread_root_event_id=thread_root_event_id,
         )
         return web.json_response({"event_id": event_id})
 
@@ -1090,6 +1132,7 @@ async def create_app() -> web.Application:
         body = str(post.get("body") or "file").strip()
         caption = str(post.get("caption") or "")
         mime_type = str(post.get("mime_type") or "application/octet-stream").strip()
+        thread_root_event_id = str(post.get("thread_root_event_id") or "").strip()
         info_raw = str(post.get("info") or "{}")
         thumbnails_enabled = _parse_bool(post.get("thumbnails_enabled"), True)
         thumb_max_px = _clamp_int(
@@ -1126,6 +1169,7 @@ async def create_app() -> web.Application:
             caption=caption,
             mime_type=mime_type,
             info=info,
+            thread_root_event_id=thread_root_event_id,
             thumbnails_enabled=thumbnails_enabled,
             thumb_max_px=thumb_max_px,
             thumb_quality=thumb_quality,
