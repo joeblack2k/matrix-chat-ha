@@ -94,7 +94,7 @@ class MatrixChatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_HOMESERVER, default="https://matrix.example.org"): cv.url,
+                vol.Required(CONF_HOMESERVER, default="https://matrix.example.org"): cv.string,
                 vol.Required(CONF_USER_ID, default="@mybot:matrix.example.org"): cv.string,
                 vol.Optional(CONF_PASSWORD, default=""): cv.string,
                 vol.Optional(CONF_ACCESS_TOKEN, default=""): cv.string,
