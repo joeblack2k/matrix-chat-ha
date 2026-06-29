@@ -34,5 +34,36 @@
     "abort": {
       "already_configured": "Deze Matrix bot is al geconfigureerd."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Matrix Chat Opties",
+        "description": "Configureer integratie-opties voor Matrix Chat.",
+        "data": {
+          "encrypted_webhook_url": "Encrypted gateway URL (optioneel)",
+          "encrypted_webhook_token": "Encrypted gateway token (optioneel)",
+          "dm_encrypted": "Gebruik versleutelde directe berichten",
+          "auto_convert_video": "Grote video's automatisch converteren",
+          "video_convert_threshold_mb": "Video conversiedrempel (MB)",
+          "max_upload_mb": "Maximale uploadgrootte (MB)",
+          "inbound_enabled": "Inbound Matrix-events inschakelen",
+          "inbound_shared_secret": "Inbound gedeeld geheim (optioneel)",
+          "commands_enabled": "Inbound-commando's inschakelen (!ha ...)",
+          "commands_allowed_senders": "Toegestane command-afzenders (een per regel)",
+          "commands_allowed_rooms": "Toegestane command-rooms (room IDs, een per regel)",
+          "commands_allowed_services": "Toegestane services (domain.service, wildcards toegestaan)",
+          "verify_ssl": "TLS-certificaat verifiëren"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan geen verbinding maken met de Matrix homeserver.",
+      "invalid_auth": "Authenticatie mislukt.",
+      "missing_auth": "Geef een wachtwoord of access token op."
+    },
+    "abort": {
+      "already_configured": "Deze Matrix bot is al geconfigureerd."
+    }
   }
 }
