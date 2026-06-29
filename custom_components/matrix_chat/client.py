@@ -11,6 +11,7 @@ import tempfile
 import time
 import urllib.parse
 import uuid
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -177,6 +178,13 @@ class MatrixChatClient:
         self.encrypted_webhook_url = (encrypted_webhook_url or "").strip()
         self.encrypted_webhook_token = (encrypted_webhook_token or "").strip()
         self.dm_encrypted = bool(dm_encrypted)
+        # configuration validation: if the user requested encrypted DMs but didn't provide a gateway URL, we silently fall back to unencrypted DMs and log a message.
+        if self.dm_encrypted and not self.encrypted_webhook_url:
+            _LOGGER.info(
+                "No encrypted gateway URL configured; falling back to unencrypted DMs for %s",
+                user_id,
+            )
+            self.dm_encrypted = False
 
         self.auto_convert_video = bool(auto_convert_video)
         self.video_convert_threshold_mb = float(video_convert_threshold_mb)
@@ -203,14 +211,22 @@ class MatrixChatClient:
 
     def _gateway_base_urls(self) -> list[str]:
         urls: list[str] = []
-        # Prefer Docker-network endpoint for HA Container deployments.
-        fallback = "http://matrix-e2ee-gateway:8080"
-        urls.append(fallback)
-
+        # If the user has configured a gateway URL, use that first (even if it doesn't resolve locally).
         configured = (self.encrypted_webhook_url or "").rstrip("/")
-        if configured and configured not in urls:
+        if configured:
             urls.append(configured)
-        return urls
+            return urls
+
+        # No configured gateway URL. Only attempt the container-local DNS name
+        # if it actually resolves on this host; this prevents needless failures
+        # in environments where no gateway is present.
+        try:
+            socket.gethostbyname("matrix-e2ee-gateway")
+        except Exception:
+            return []
+
+        # Container service exists; use the default internal endpoint.
+        return ["http://matrix-e2ee-gateway:8080"]
 
     async def async_initialize(self) -> None:
         """Load cache and verify credentials."""

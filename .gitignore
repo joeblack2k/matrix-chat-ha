@@ -22,3 +22,4 @@ secrets.*
 build/
 dist/
 *.egg-info/
+tests/test_defaults.py

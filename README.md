@@ -75,11 +75,11 @@ Minimum config fields:
 - `user_id`
 - one auth method: `password` or `access_token`
 
-Optional but recommended for encrypted rooms:
+Optional for encrypted rooms only:
 
 - `encrypted_webhook_url`
 - `encrypted_webhook_token`
-- `dm_encrypted: true`
+- `dm_encrypted: true` (only if you explicitly want encrypted DMs)
 
 See full examples in `docs/HOWTO.md`.
 

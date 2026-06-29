@@ -1,0 +1,32 @@
+{
+  "configuration": {
+    "step": {
+      "user": {
+        "title": "Matrix E2EE Gateway",
+        "description": "Configure the Matrix account used by the encrypted gateway.",
+        "data": {
+          "matrix_homeserver": "Matrix homeserver URL",
+          "matrix_user_id": "Bot user ID (MXID)",
+          "matrix_password": "Password",
+          "matrix_access_token": "Access token",
+          "matrix_gateway_token": "Gateway API token",
+          "matrix_device_id": "Device ID",
+          "matrix_device_name": "Device name",
+          "matrix_store_path": "Store path",
+          "matrix_gateway_host": "Listen host",
+          "matrix_gateway_port": "Listen port",
+          "verify_ssl": "Verify TLS certificate",
+          "matrix_ignore_unverified_devices": "Ignore unverified devices",
+          "matrix_inbound_webhook_url": "Inbound webhook URL",
+          "matrix_inbound_shared_secret": "Inbound shared secret",
+          "matrix_debug_endpoints": "Enable debug endpoints",
+          "log_level": "Log level"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Authentication failed.",
+      "missing_auth": "Provide a password or an access token."
+    }
+  }
+}

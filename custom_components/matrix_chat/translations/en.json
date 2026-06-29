@@ -13,7 +13,7 @@
           "verify_ssl": "Verify TLS certificate",
           "encrypted_webhook_url": "Encrypted gateway URL (optional)",
           "encrypted_webhook_token": "Encrypted gateway token (optional)",
-          "dm_encrypted": "Create encrypted direct messages",
+          "dm_encrypted": "Use encrypted direct messages when a gateway is configured",
           "auto_convert_video": "Auto-convert large videos",
           "video_convert_threshold_mb": "Video convert threshold (MB)",
           "max_upload_mb": "Max upload size (MB)",

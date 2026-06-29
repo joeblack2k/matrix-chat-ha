@@ -350,13 +350,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.config_entries.async_update_entry(entry, data=new_data)
 
     hass.data[DOMAIN]["clients"][entry.entry_id] = client
-    coordinator = MatrixChatGatewayCoordinator(hass, client)
-    hass.data[DOMAIN]["coordinators"][entry.entry_id] = coordinator
-    await coordinator.async_config_entry_first_refresh()
+
+    # Only create the gateway diagnostics coordinator and gateway platforms
+    # when a gateway endpoint is actually configured or discoverable. This
+    # prevents setup failures for users who do not run the encrypted gateway
+    # and only want plain (unencrypted) messaging.
+    gateway_endpoints = client._gateway_base_urls()
+    if gateway_endpoints:
+        coordinator = MatrixChatGatewayCoordinator(hass, client)
+        hass.data[DOMAIN]["coordinators"][entry.entry_id] = coordinator
+        await coordinator.async_config_entry_first_refresh()
+        # Forward the gateway-related platforms (sensors/binary_sensors)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    else:
+        _LOGGER.debug("No encrypted gateway endpoints discovered; skipping gateway coordinator and sensors")
+
     await _async_register_inbound_webhook(hass, entry)
     await _async_register_services(hass)
     await _async_register_notify(hass)
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True

@@ -5,8 +5,7 @@ description: Optional encrypted Matrix gateway for the Matrix Chat Home Assistan
 url: https://github.com/joeblack2k/matrix-chat-ha/tree/main/addons/matrix-e2ee-gateway
 arch:
   - amd64
-  - armv7
-  - arm64
+  - aarch64
 init: false
 startup: application
 boot: auto

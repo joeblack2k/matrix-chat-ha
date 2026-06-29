@@ -92,28 +92,36 @@ class MatrixChatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     _LOGGER.exception("Unexpected error in Matrix Chat config flow")
                     errors["base"] = "cannot_connect"
 
+        # If the user already provided input, use those values as defaults
+        # so the form retains the user's choices when validation fails.
+        defaults = user_input or {}
+
         schema = vol.Schema(
             {
-                vol.Required(CONF_HOMESERVER, default="https://matrix.example.org"): cv.string,
-                vol.Required(CONF_USER_ID, default="@mybot:matrix.example.org"): cv.string,
-                vol.Optional(CONF_PASSWORD, default=""): cv.string,
-                vol.Optional(CONF_ACCESS_TOKEN, default=""): cv.string,
-                vol.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
-                vol.Optional(CONF_ENCRYPTED_WEBHOOK_URL, default=""): cv.string,
-                vol.Optional(CONF_ENCRYPTED_WEBHOOK_TOKEN, default=""): cv.string,
-                vol.Optional(CONF_DM_ENCRYPTED, default=DEFAULT_DM_ENCRYPTED): cv.boolean,
-                vol.Optional(CONF_AUTO_CONVERT_VIDEO, default=DEFAULT_AUTO_CONVERT_VIDEO): cv.boolean,
+                vol.Required(
+                    CONF_HOMESERVER, default=defaults.get(CONF_HOMESERVER, "https://matrix.example.org")
+                ): cv.string,
+                vol.Required(
+                    CONF_USER_ID, default=defaults.get(CONF_USER_ID, "@mybot:matrix.example.org")
+                ): cv.string,
+                vol.Optional(CONF_PASSWORD, default=defaults.get(CONF_PASSWORD, "")): cv.string,
+                vol.Optional(CONF_ACCESS_TOKEN, default=defaults.get(CONF_ACCESS_TOKEN, "")): cv.string,
+                vol.Optional(CONF_VERIFY_SSL, default=defaults.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)): cv.boolean,
+                vol.Optional(CONF_ENCRYPTED_WEBHOOK_URL, default=defaults.get(CONF_ENCRYPTED_WEBHOOK_URL, "")): cv.string,
+                vol.Optional(CONF_ENCRYPTED_WEBHOOK_TOKEN, default=defaults.get(CONF_ENCRYPTED_WEBHOOK_TOKEN, "")): cv.string,
+                vol.Optional(CONF_DM_ENCRYPTED, default=defaults.get(CONF_DM_ENCRYPTED, DEFAULT_DM_ENCRYPTED)): cv.boolean,
+                vol.Optional(CONF_AUTO_CONVERT_VIDEO, default=defaults.get(CONF_AUTO_CONVERT_VIDEO, DEFAULT_AUTO_CONVERT_VIDEO)): cv.boolean,
                 vol.Optional(
                     CONF_VIDEO_CONVERT_THRESHOLD_MB,
-                    default=DEFAULT_VIDEO_CONVERT_THRESHOLD_MB,
+                    default=defaults.get(CONF_VIDEO_CONVERT_THRESHOLD_MB, DEFAULT_VIDEO_CONVERT_THRESHOLD_MB),
                 ): vol.Coerce(float),
-                vol.Optional(CONF_MAX_UPLOAD_MB, default=DEFAULT_MAX_UPLOAD_MB): vol.Coerce(float),
-                vol.Optional(CONF_INBOUND_ENABLED, default=DEFAULT_INBOUND_ENABLED): cv.boolean,
-                vol.Optional(CONF_INBOUND_SHARED_SECRET, default=""): cv.string,
-                vol.Optional(CONF_COMMANDS_ENABLED, default=DEFAULT_COMMANDS_ENABLED): cv.boolean,
-                vol.Optional(CONF_COMMANDS_ALLOWED_SENDERS, default=""): cv.string,
-                vol.Optional(CONF_COMMANDS_ALLOWED_ROOMS, default=""): cv.string,
-                vol.Optional(CONF_COMMANDS_ALLOWED_SERVICES, default=""): cv.string,
+                vol.Optional(CONF_MAX_UPLOAD_MB, default=defaults.get(CONF_MAX_UPLOAD_MB, DEFAULT_MAX_UPLOAD_MB)): vol.Coerce(float),
+                vol.Optional(CONF_INBOUND_ENABLED, default=defaults.get(CONF_INBOUND_ENABLED, DEFAULT_INBOUND_ENABLED)): cv.boolean,
+                vol.Optional(CONF_INBOUND_SHARED_SECRET, default=defaults.get(CONF_INBOUND_SHARED_SECRET, "")): cv.string,
+                vol.Optional(CONF_COMMANDS_ENABLED, default=defaults.get(CONF_COMMANDS_ENABLED, DEFAULT_COMMANDS_ENABLED)): cv.boolean,
+                vol.Optional(CONF_COMMANDS_ALLOWED_SENDERS, default=defaults.get(CONF_COMMANDS_ALLOWED_SENDERS, "")): cv.string,
+                vol.Optional(CONF_COMMANDS_ALLOWED_ROOMS, default=defaults.get(CONF_COMMANDS_ALLOWED_ROOMS, "")): cv.string,
+                vol.Optional(CONF_COMMANDS_ALLOWED_SERVICES, default=defaults.get(CONF_COMMANDS_ALLOWED_SERVICES, "")): cv.string,
             }
         )
 
