@@ -24,10 +24,10 @@ The add-on will start the same gateway implementation used by the standalone Doc
 ## Suggested configuration
 
 - `matrix_store_path: /addon_configs/<slug>/store`
-- `matrix_gateway_port: 8080`
+- `matrix_gateway_port: 18081`
 - `matrix_gateway_host: 0.0.0.0`
 
 Use the add-on's exposed URL in the integration settings:
 
-- `encrypted_webhook_url: http://<home-assistant-host>:8080`
+- `encrypted_webhook_url: http://<home-assistant-host>:18081`
 - `encrypted_webhook_token: <matrix_gateway_token>`

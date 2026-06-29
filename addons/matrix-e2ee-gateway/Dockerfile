@@ -21,5 +21,5 @@ RUN chmod a+x /run.sh
 
 RUN mkdir -p /data/store
 
-EXPOSE 8080
+EXPOSE 18081
 CMD ["/run.sh"]

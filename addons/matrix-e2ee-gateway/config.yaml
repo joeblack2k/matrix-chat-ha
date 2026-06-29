@@ -11,9 +11,9 @@ startup: application
 boot: auto
 host_network: false
 ports:
-  8080/tcp: 8080
+  18081/tcp: 18081
 ports_description:
-  8080/tcp: HTTP API for encrypted Matrix sends and health checks
+  18081/tcp: HTTP API for encrypted Matrix sends and health checks
 map:
   - addon_config:rw
   - share:rw
@@ -27,7 +27,7 @@ options:
   matrix_device_name: "Home Assistant Matrix E2EE Gateway"
   matrix_store_path: "/data/store"
   matrix_gateway_host: "0.0.0.0"
-  matrix_gateway_port: 8080
+  matrix_gateway_port: 18081
   verify_ssl: true
   matrix_ignore_unverified_devices: true
   matrix_inbound_webhook_url: ""
