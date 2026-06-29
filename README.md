@@ -91,7 +91,7 @@ For Home Assistant OS / Supervised deployments, the recommended path is to insta
 - Install the add-on named "Matrix E2EE Gateway".
 - Configure the required Matrix credentials and gateway token.
 - Set the integration options:
-  - `encrypted_webhook_url: http://<home-assistant-host>:8080`
+  - `encrypted_webhook_url: http://<home-assistant-host>:18081`
   - `encrypted_webhook_token: <matrix_gateway_token>`
   - `dm_encrypted: true`
 
