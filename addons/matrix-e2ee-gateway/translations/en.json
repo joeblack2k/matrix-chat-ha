@@ -1,0 +1,68 @@
+{
+  "configuration": {
+    "matrix_homeserver": {
+      "name": "Matrix homeserver URL",
+      "description": "The Matrix homeserver URL used by the gateway."
+    },
+    "matrix_user_id": {
+      "name": "Bot user ID (MXID)",
+      "description": "The Matrix user ID for the gateway account."
+    },
+    "matrix_password": {
+      "name": "Password",
+      "description": "The password for the gateway account."
+    },
+    "matrix_access_token": {
+      "name": "Access token",
+      "description": "Optional access token for the gateway account."
+    },
+    "matrix_gateway_token": {
+      "name": "Gateway API token",
+      "description": "The shared token used to authenticate requests to the gateway."
+    },
+    "matrix_device_id": {
+      "name": "Device ID",
+      "description": "Optional Matrix device ID for the gateway session."
+    },
+    "matrix_device_name": {
+      "name": "Device name",
+      "description": "The Matrix device name shown to the homeserver."
+    },
+    "matrix_store_path": {
+      "name": "Store path",
+      "description": "Where the gateway should keep its local encryption store."
+    },
+    "matrix_gateway_host": {
+      "name": "Listen host",
+      "description": "The host interface the gateway should bind to."
+    },
+    "matrix_gateway_port": {
+      "name": "Listen port",
+      "description": "The TCP port used by the gateway API."
+    },
+    "verify_ssl": {
+      "name": "Verify TLS certificate",
+      "description": "Verify the homeserver TLS certificate when connecting."
+    },
+    "matrix_ignore_unverified_devices": {
+      "name": "Ignore unverified devices",
+      "description": "Allow the gateway to ignore unverified Matrix devices."
+    },
+    "matrix_inbound_webhook_url": {
+      "name": "Inbound webhook URL",
+      "description": "Optional webhook URL for inbound Matrix events."
+    },
+    "matrix_inbound_shared_secret": {
+      "name": "Inbound shared secret",
+      "description": "Optional shared secret for inbound webhook validation."
+    },
+    "matrix_debug_endpoints": {
+      "name": "Enable debug endpoints",
+      "description": "Expose additional debug endpoints for troubleshooting."
+    },
+    "log_level": {
+      "name": "Log level",
+      "description": "The verbosity of the gateway log output."
+    }
+  }
+}

@@ -13,7 +13,7 @@
           "verify_ssl": "Verify TLS certificate",
           "encrypted_webhook_url": "Encrypted gateway URL (optional)",
           "encrypted_webhook_token": "Encrypted gateway token (optional)",
-          "dm_encrypted": "Create encrypted direct messages",
+          "dm_encrypted": "Use encrypted direct messages when a gateway is configured",
           "auto_convert_video": "Auto-convert large videos",
           "video_convert_threshold_mb": "Video convert threshold (MB)",
           "max_upload_mb": "Max upload size (MB)",
@@ -23,6 +23,37 @@
           "commands_allowed_senders": "Allowed command senders (one per line)",
           "commands_allowed_rooms": "Allowed command rooms (room IDs, one per line)",
           "commands_allowed_services": "Allowed services (domain.service, wildcards allowed)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to Matrix homeserver.",
+      "invalid_auth": "Authentication failed.",
+      "missing_auth": "Provide a password or an access token."
+    },
+    "abort": {
+      "already_configured": "This Matrix bot is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Matrix Chat Options",
+        "description": "Configure integration options for Matrix Chat.",
+        "data": {
+          "encrypted_webhook_url": "Encrypted gateway URL (optional)",
+          "encrypted_webhook_token": "Encrypted gateway token (optional)",
+          "dm_encrypted": "Use encrypted direct messages",
+          "auto_convert_video": "Auto-convert large videos",
+          "video_convert_threshold_mb": "Video convert threshold (MB)",
+          "max_upload_mb": "Max upload size (MB)",
+          "inbound_enabled": "Enable inbound Matrix events",
+          "inbound_shared_secret": "Inbound shared secret (optional)",
+          "commands_enabled": "Enable inbound commands (!ha ...)",
+          "commands_allowed_senders": "Allowed command senders (one per line)",
+          "commands_allowed_rooms": "Allowed command rooms (room IDs, one per line)",
+          "commands_allowed_services": "Allowed services (domain.service, wildcards allowed)",
+          "verify_ssl": "Verify TLS certificate"
         }
       }
     },

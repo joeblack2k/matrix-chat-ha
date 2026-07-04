@@ -1,0 +1,53 @@
+name: Matrix E2EE Gateway
+version: "1.0.0"
+slug: matrix-e2ee-gateway
+description: Optional encrypted Matrix gateway for the Matrix Chat Home Assistant integration.
+url: https://github.com/joeblack2k/matrix-chat-ha/tree/main/addons/matrix-e2ee-gateway
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+host_network: false
+ports:
+  18081/tcp: 18081
+ports_description:
+  18081/tcp: HTTP API for encrypted Matrix sends and health checks
+map:
+  - addon_config:rw
+  - share:rw
+options:
+  matrix_homeserver: ""
+  matrix_user_id: ""
+  matrix_access_token: ""
+  matrix_password: ""
+  matrix_gateway_token: ""
+  matrix_device_id: ""
+  matrix_device_name: "Home Assistant Matrix E2EE Gateway"
+  matrix_store_path: "/data/store"
+  matrix_gateway_host: "0.0.0.0"
+  matrix_gateway_port: 18081
+  verify_ssl: true
+  matrix_ignore_unverified_devices: true
+  matrix_inbound_webhook_url: ""
+  matrix_inbound_shared_secret: ""
+  matrix_debug_endpoints: false
+  log_level: "INFO"
+schema:
+  matrix_homeserver: str
+  matrix_user_id: str
+  matrix_access_token: password?
+  matrix_password: password?
+  matrix_gateway_token: password
+  matrix_device_id: str?
+  matrix_device_name: str?
+  matrix_store_path: str?
+  matrix_gateway_host: str?
+  matrix_gateway_port: int?
+  verify_ssl: bool?
+  matrix_ignore_unverified_devices: bool?
+  matrix_inbound_webhook_url: str?
+  matrix_inbound_shared_secret: str?
+  matrix_debug_endpoints: bool?
+  log_level: list(INFO|DEBUG|WARNING|ERROR|CRITICAL)?

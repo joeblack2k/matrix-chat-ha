@@ -6,6 +6,11 @@ Small HTTP gateway for encrypted Matrix send (text + image + video) used by Home
 Home Assistant container often misses `olm`, which blocks native Matrix E2EE sending.
 This gateway runs separately with `matrix-nio[e2e]` and handles encrypted room sends.
 
+## Home Assistant deployment options
+
+- For Home Assistant OS / Supervised: install the separate add-on from the repository root under `addons/matrix-e2ee-gateway`.
+- For Docker / manual deployments: use this directory with `docker compose`.
+
 ## API
 - `GET /health`
 - `POST /send_text` JSON:

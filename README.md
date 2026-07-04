@@ -83,7 +83,19 @@ Optional but recommended for encrypted rooms:
 
 See full examples in `docs/HOWTO.md`.
 
-## 3) Optional: start encrypted gateway
+## 3) Optional: install the encrypted gateway
+
+For Home Assistant OS / Supervised deployments, the recommended path is to install the separate add-on from this repository and point the integration at it.
+
+- Add this repository as a Home Assistant add-on repository.
+- Install the add-on named "Matrix E2EE Gateway".
+- Configure the required Matrix credentials and gateway token.
+- Set the integration options:
+  - `encrypted_webhook_url: http://<home-assistant-host>:8080`
+  - `encrypted_webhook_token: <matrix_gateway_token>`
+  - `dm_encrypted: true`
+
+If you prefer the standalone Docker deployment, you can still use the original compose workflow:
 
 ```bash
 cd encrypted_gateway
