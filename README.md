@@ -53,19 +53,18 @@ flowchart LR
 
 ## Installation
 
-## 1) Install integration files
+### HACS (Recommended)
 
-Copy:
+1. Make sure you have [HACS](https://hacs.xyz/) installed
+2. Search for "matrix_chat" and install the integration
+3. Restart Home Assistant
 
-- `custom_components/matrix_chat`
+### Manual Installation
 
-into your HA config directory under:
+1. Copy the `custom_components/matrix_chat` directory to your Home Assistant's `custom_components` directory
+2. Restart Home Assistant
 
-- `/config/custom_components/matrix_chat`
-
-Restart Home Assistant.
-
-## 2) Configure Matrix Chat
+### Configuration
 
 Use UI flow (`Settings -> Devices & Services -> Add Integration -> Matrix Chat`) or YAML import.
 
@@ -83,7 +82,7 @@ Optional but recommended for encrypted rooms:
 
 See full examples in `docs/HOWTO.md`.
 
-## 3) Optional: start encrypted gateway
+### Optional: start encrypted gateway
 
 ```bash
 cd encrypted_gateway
